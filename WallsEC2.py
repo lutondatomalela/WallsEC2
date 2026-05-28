@@ -2614,7 +2614,7 @@ class WallsEC2App(tk.Tk):
                 canvas.setFont("Courier", 8)
                 canvas.setFillColor(colors.grey)
                 header_name = "WallsEC2"
-                header_txt = header_name + " | Dimensionamento de Pareces (EC2)"
+                header_txt = header_name + " | Dimensionamento de Paredes (EC2)"
                 canvas.drawString(margin_l, h - 10 * mm, header_txt)
                 # Link invisível sobre o nome do programa no cabeçalho.
                 header_w = canvas.stringWidth(header_name, "Courier", 8)
