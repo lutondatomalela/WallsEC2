@@ -1,6 +1,6 @@
 # WallsEC2
 
-**WallsEC2** é uma ferramenta em Python para dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2, com tratamento de esforços por painel, armaduras distribuídas, esforço transverso, controlo de fendilhação e exportação de relatórios em Excel e PDF.
+**WallsEC2** é uma ferramenta em Python para dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2, com tratamento de esforços por painel, armaduras distribuídas, esforço transverso, controlo de fendilhação e exportação de relatórios em XLSX e PDF.
 
 Repositório: [github.com/lutondatomalela/WallsEC2](https://github.com/lutondatomalela/WallsEC2)
 
@@ -14,7 +14,7 @@ Repositório: [github.com/lutondatomalela/WallsEC2](https://github.com/lutondato
 - Controlo de fendilhação simplificado e verificação explícita de `wk` para combinação quase-permanente.
 - Optimização de armaduras com solução base e reforços locais.
 - Resumo por painel, zonas de armadura, diagnóstico e validação da tabela importada.
-- Exportação profissional para `.xlsx` e `.pdf`, com metadados.
+- Exportação de resultados detalhados para `.xlsx` e `.pdf`.
 
 ## Âmbito
 
@@ -25,7 +25,6 @@ Não estão incluídas nesta versão:
 
 - verificação global de compressão;
 - flexão composta `N-M`;
-- estabilidade;
 - efeitos de segunda ordem;
 - verificação sísmica específica.
 
@@ -47,10 +46,10 @@ pip install pandas openpyxl reportlab
 Executar:
 
 ```bash
-python WallsEC2_GUI_v10_9.py
+python WallsEC2.py
 ```
 
-Fluxo recomendado:
+workflow:
 
 1. Definir geometria, materiais, unidades e opções de cálculo.
 2. Colar ou importar a tabela de esforços.
@@ -59,7 +58,7 @@ Fluxo recomendado:
 5. Rever diagnóstico, resumo por painel e armaduras adoptadas.
 6. Exportar os resultados em `.xlsx` e/ou `.pdf`.
 
-## Formato mínimo da tabela
+## Formato recomendado da tabela
 
 ```text
 Panel   Node   Case        MXX     MYY     MXY     QXX     QYY
@@ -67,14 +66,14 @@ Panel   Node   Case        MXX     MYY     MXY     QXX     QYY
 43      49     302 (QP)    -5.10   1.40    0.52     7.20   2.10
 ```
 
-Unidades usuais:
+Unidades:
 
 - Momentos: `kNm/m`
 - Esforços transversos: `kN/m`
 
 ## Resultados exportados
 
-O ficheiro Excel inclui folhas separadas para:
+O ficheiro XLSX inclui folhas separadas para:
 
 - metadados;
 - dados de entrada;
@@ -88,7 +87,7 @@ O ficheiro Excel inclui folhas separadas para:
 - notas EC2;
 - resultados completos para auditoria.
 
-O relatório PDF apresenta uma síntese técnica adequada para anexar a uma memória descritiva e justificativa.
+O relatório PDF apresenta uma síntese técnica adequada para anexar a uma memória descritiva e justificativa
 
 ## Licença
 
