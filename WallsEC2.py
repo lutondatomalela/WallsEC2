@@ -23,8 +23,9 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "WallsEC2 - Paredes de Betão Armado (EC2)"
 APP_NAME = "WallsEC2"
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.5"
 APP_AUTHOR = "Eng.º Lutonda Tomalela"
+APP_REPORT_AUTHOR = "https://github.com/lutondatomalela/WallsEC2"
 APP_SUBJECT = "Dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2"
 APP_KEYWORDS = "WallsEC2, Eurocódigo 2, EC2, NP EN 1992-1-1, paredes de betão armado, armaduras, esforço transverso, fendilhação"
 APP_CATEGORY = "Structural Engineering / Reinforced Concrete Design"
@@ -103,6 +104,17 @@ COLUMN_ALIASES = {
     "mxx": ["mxx (knm/m)", "mxx [knm/m]", "mxx", "mx (knm/m)", "mx [knm/m]", "mx"],
     "myy": ["myy (knm/m)", "myy [knm/m]", "myy", "my (knm/m)", "my [knm/m]", "my"],
     "mxy": ["mxy (knm/m)", "mxy [knm/m]", "mxy", "mxyy"],
+    # Momentos já transformados para dimensionamento de armadura por Wood-Armer.
+    # Nestes casos o programa não volta a aplicar MXY. Usa directamente M+/M- por direcção.
+    "mxx_pos_wa": ["mxx+", "mxx +", "mxx+ (w&a)", "mxx+ (&wa)", "mxx+ (knm/m)", "mxx+ (&wa) (knm/m)", "mxx+ (w&a) (knm/m)", "mx+", "mx+ (w&a)", "mx+ (&wa)"],
+    "mxx_neg_wa": ["mxx-", "mxx -", "mxx- (w&a)", "mxx- (&wa)", "mxx- (knm/m)", "mxx- (&wa) (knm/m)", "mxx- (w&a) (knm/m)", "mx-", "mx- (w&a)", "mx- (&wa)"],
+    "myy_pos_wa": ["myy+", "myy +", "myy+ (w&a)", "myy+ (&wa)", "myy+ (knm/m)", "myy+ (&wa) (knm/m)", "myy+ (w&a) (knm/m)", "my+", "my+ (w&a)", "my+ (&wa)"],
+    "myy_neg_wa": ["myy-", "myy -", "myy- (w&a)", "myy- (&wa)", "myy- (knm/m)", "myy- (&wa) (knm/m)", "myy- (w&a) (knm/m)", "my-", "my- (w&a)", "my- (&wa)"],
+    # Forças/membrana já transformadas por Wood-Armer. Ficam guardadas para auditoria, mas não entram na verificação global N-M desta versão.
+    "nxx_pos_wa": ["nxx+", "nxx+ (w&a)", "nxx+ (&wa)", "nxx+ (kn/m)", "nxx+ (&wa) (kn/m)", "nx+", "nx+ (w&a)", "nx+ (&wa)"],
+    "nxx_neg_wa": ["nxx-", "nxx- (w&a)", "nxx- (&wa)", "nxx- (kn/m)", "nxx- (&wa) (kn/m)", "nx-", "nx- (w&a)", "nx- (&wa)"],
+    "nyy_pos_wa": ["nyy+", "nyy+ (w&a)", "nyy+ (&wa)", "nyy+ (kn/m)", "nyy+ (&wa) (kn/m)", "ny+", "ny+ (w&a)", "ny+ (&wa)"],
+    "nyy_neg_wa": ["nyy-", "nyy- (w&a)", "nyy- (&wa)", "nyy- (kn/m)", "nyy- (&wa) (kn/m)", "ny-", "ny- (w&a)", "ny- (&wa)"],
     "qxx": ["qxx (kn/m)", "qxx [kn/m]", "qxx", "qx (kn/m)", "qx [kn/m]", "qx", "vxx", "vx"],
     "qyy": ["qyy (kn/m)", "qyy [kn/m]", "qyy", "qy (kn/m)", "qy [kn/m]", "qy", "vyy", "vy"],
     "nxx": ["nxx (kn/m)", "nxx [kn/m]", "nxx", "nx (kn/m)", "nx [kn/m]", "nx"],
@@ -129,8 +141,11 @@ def parse_pasted_table(text: str) -> pd.DataFrame:
     if len(lines) < 2:
         return pd.DataFrame()
 
-    # Leitura robusta para tabelas copiadas do software de análise estrutural com espaços simples, por exemplo:
+    #leitura robusta para tabelas copiadas do software de análise estrutural com espaços simples, por exemplo:
     # 43/ 49/ 302 (CQC) -2,17 -0,13 0,83 43 5,59 3,69
+    #também aceita tabelas de momentos já transformados para armadura (W&A), com colunas MXX+/MXX-/MYY+/MYY-
+    header_norm = normalize_text(lines[0]) if lines else ""
+    header_has_wa_moments = all(k in header_norm for k in ["mxx+", "mxx-", "myy+", "myy-"])
     robot_rows = []
     row_re = re.compile(
         r"^\s*(?P<panel>\S+)\s*/\s*(?P<node>\S+)\s*/\s*(?P<case>\d+)\s*"
@@ -143,6 +158,32 @@ def parse_pasted_table(text: str) -> pd.DataFrame:
             robot_rows = []
             break
         nums = num_re.findall(m.group("rest"))
+        case_txt = m.group("case")
+        if m.group("casetype"):
+            case_txt = f"{case_txt} {m.group('casetype').strip()}"
+
+        if header_has_wa_moments and len(nums) >= 4:
+            # Esperado: MXX+, MXX-, MYY+, MYY- [, NXX-, NYY-, NXX+, NYY+].
+            row = {
+                "panel_node_case": f"{m.group('panel')}/{m.group('node')}/{case_txt}",
+                "panel": m.group("panel"),
+                "node": m.group("node"),
+                "case": case_txt,
+                "mxx_pos_wa": nums[0],
+                "mxx_neg_wa": nums[1],
+                "myy_pos_wa": nums[2],
+                "myy_neg_wa": nums[3],
+            }
+            if len(nums) >= 8:
+                row.update({
+                    "nxx_neg_wa": nums[4],
+                    "nyy_neg_wa": nums[5],
+                    "nxx_pos_wa": nums[6],
+                    "nyy_pos_wa": nums[7],
+                })
+            robot_rows.append(row)
+            continue
+
         # Esperado: MXX, MYY, MXY, Panel, QXX, QYY. Em algumas tabelas o Panel repetido pode faltar.
         if len(nums) >= 6:
             mxx, myy, mxy, panel_rep, qxx, qyy = nums[:6]
@@ -152,9 +193,6 @@ def parse_pasted_table(text: str) -> pd.DataFrame:
         else:
             robot_rows = []
             break
-        case_txt = m.group("case")
-        if m.group("casetype"):
-            case_txt = f"{case_txt} {m.group('casetype').strip()}"
         robot_rows.append({
             "panel_node_case": f"{m.group('panel')}/{m.group('node')}/{case_txt}",
             "panel": panel_rep,
@@ -178,6 +216,43 @@ def parse_pasted_table(text: str) -> pd.DataFrame:
     return pd.DataFrame(body, columns=header)
 
 
+
+def read_csv_robust(path: str) -> pd.DataFrame:
+    """Leitura robusta de CSV exportado por folhas de cálculo ou software de análise.
+
+    Tenta automaticamente encoding e separador. Mantém tudo como texto para preservar
+    vírgulas decimais; a conversão numérica é feita depois por safe_float().
+    """
+    encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1", "utf-16"]
+    attempts = []
+    for enc in encodings:
+        # sep=None usa o detector do pandas; depois tenta separadores explícitos.
+        for sep in [None, ";", ",", "\t", "|"]:
+            try:
+                kwargs = {"dtype": str, "encoding": enc, "engine": "python"}
+                if sep is None:
+                    kwargs["sep"] = None
+                else:
+                    kwargs["sep"] = sep
+                df = pd.read_csv(path, **kwargs)
+                # Aceita a primeira leitura com mais de uma coluna ou, no mínimo, dados.
+                if df is not None and not df.empty and len(df.columns) > 1:
+                    return df
+                attempts.append((enc, sep, len(df.columns) if df is not None else 0))
+            except Exception as exc:
+                attempts.append((enc, sep, str(exc)[:80]))
+    # último fallback: lê o texto e usa o parser de colagem.
+    for enc in encodings:
+        try:
+            with open(path, "r", encoding=enc, errors="ignore") as f:
+                txt = f.read()
+            df = parse_pasted_table(txt)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass
+    raise ValueError("Não foi possível importar o CSV. Confirmar se o ficheiro não está vazio e se usa separador ;, vírgula, tabulação ou |.")
+
 def rename_known_columns(df: pd.DataFrame) -> pd.DataFrame:
     norm_to_original = {normalize_text(c): c for c in df.columns}
     rename_map = {}
@@ -186,7 +261,7 @@ def rename_known_columns(df: pd.DataFrame) -> pd.DataFrame:
             if alias in norm_to_original:
                 rename_map[norm_to_original[alias]] = target
                 break
-    # fallback: remove units/brackets and retry, useful for software de análise estrutural tables with headers like MXX [kNm/m].
+    # fallback: remove units/brackets and retry, useful for softwares de análise estrutural tables with headers like MXX [kNm/m]. (otimizado pra utilizar com o robot structural anaysis)
     for original in df.columns:
         if original in rename_map:
             continue
@@ -241,8 +316,15 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "case" in df.columns:
         df["case_id"] = df["case"].map(canonical_case_id)
 
-    for c in ["mxx", "myy", "mxy", "qxx", "qyy", "nxx", "nyy", "nxy"]:
-        if c not in df.columns:
+    numeric_cols = [
+        "mxx", "myy", "mxy", "qxx", "qyy", "nxx", "nyy", "nxy",
+        "mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa",
+        "nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa",
+    ]
+    for c in numeric_cols:
+        missing = c not in df.columns
+        df[f"__missing_{c}"] = bool(missing)
+        if missing:
             df[c] = 0.0
         df[c] = df[c].map(lambda v: safe_float(v, 0.0))
 
@@ -633,13 +715,14 @@ class WallDesigner:
         return mx_pos, mx_neg, my_pos, my_neg, "Wood-Armer conservativo |MXY|"
 
     def crack_simplified_status(self, sol: RebarSolution) -> Tuple[str, str]:
-        # Controlo sempre activo quando wk não é seleccionado.
+        # Controlo indirecto quando wk não é seleccionado.
+        # Não substitui o cálculo explícito da largura de fenda em ELS quase-permanente.
         # Usa espaçamento efectivo quando existe reforço intercalado.
         phi_ctrl, s_eff, _ = self.rebar_crack_geometry(sol)
         if s_eff <= 200.0 and phi_ctrl <= 12.0:
-            return "OK", "controlo simplificado: Ø≤12 e s_ef≤200 mm"
+            return "OK*", "controlo indirecto: Ø≤12 e s_ef≤200 mm; wk não calculado"
         if s_eff <= 250.0 and phi_ctrl <= 16.0:
-            return "OK*", "controlo simplificado preliminar: Ø≤16 e s_ef≤250 mm; confirmar por ELS se condicionante"
+            return "OK*", "controlo indirecto no limite: Ø≤16 e s_ef≤250 mm; confirmar por ELS se condicionante"
         return "Verificar", "diâmetro/espaçamento efectivo elevado; recomenda-se verificação wk com combinação quase-permanente"
 
     def crack_min_as_per_face(self, sigma_s_lim: float = 500.0) -> float:
@@ -862,7 +945,7 @@ class WallDesigner:
 
     def crack_full_status(self, wk_values: List[float], case_value: object) -> Tuple[str, str]:
         if not self.wk_check_enabled:
-            return "Não avaliado", "wk não seleccionado; foi aplicado apenas o controlo simplificado por diâmetro/espaçamento"
+            return "OK*", "wk não seleccionado; aplicado apenas controlo indirecto por diâmetro/espaçamento"
         if not self.qp_case:
             return "Verificar", "verificação wk seleccionada, mas o número da combinação quase-permanente não foi indicado"
         if not self.is_qp_case(case_value):
@@ -887,14 +970,36 @@ class WallDesigner:
         nyy = safe_float(row.get("nyy", 0.0), 0.0)
         nxy = safe_float(row.get("nxy", 0.0), 0.0)
 
+        wa_cols = ["mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa"]
+        has_explicit_wa = any((c in row.index) and (not bool(row.get(f"__missing_{c}", False))) for c in wa_cols)
+        if has_explicit_wa:
+            mx_pos = abs(safe_float(row.get("mxx_pos_wa", 0.0), 0.0) * self.moment_factor)
+            mx_neg = abs(safe_float(row.get("mxx_neg_wa", 0.0), 0.0) * self.moment_factor)
+            my_pos = abs(safe_float(row.get("myy_pos_wa", 0.0), 0.0) * self.moment_factor)
+            my_neg = abs(safe_float(row.get("myy_neg_wa", 0.0), 0.0) * self.moment_factor)
+            # Valores apenas para reporte quando a tabela não contém MXX/MYY/MXY originais.
+            if bool(row.get("__missing_mxx", False)):
+                mxx = mx_pos if mx_pos >= mx_neg else -mx_neg
+            if bool(row.get("__missing_myy", False)):
+                myy = my_pos if my_pos >= my_neg else -my_neg
+            if bool(row.get("__missing_mxy", False)):
+                mxy = 0.0
+        
         if self.swap_local_axes:
             mxx, myy = myy, mxx
             qxx, qyy = qyy, qxx
             nxx, nyy = nyy, nxx
+            if has_explicit_wa:
+                mx_pos, my_pos = my_pos, mx_pos
+                mx_neg, my_neg = my_neg, mx_neg
 
-        mx_pos, mx_neg, my_pos, my_neg, wa_method_used = self.wood_armer_moments(mxx, myy, mxy)
-        m_ref = max(abs(mxx), abs(myy), 1e-9)
-        mxy_ratio = abs(mxy) / m_ref
+        if has_explicit_wa:
+            wa_method_used = "Wood-Armer importado (M+/M-)"
+            mxy_ratio = 0.0
+        else:
+            mx_pos, mx_neg, my_pos, my_neg, wa_method_used = self.wood_armer_moments(mxx, myy, mxy)
+            m_ref = max(abs(mxx), abs(myy), 1e-9)
+            mxy_ratio = abs(mxy) / m_ref
 
         asx_pos_flex = self.flexural_as_required(mx_pos)
         asx_neg_flex = self.flexural_as_required(mx_neg)
@@ -1011,25 +1116,71 @@ class WallDesigner:
         transverse_links_required = as_vertical_total > 0.02 * self.ac_per_m + 1e-9
         mesh_exception = (max_vert_phi <= 16.0 and self.cover > 2.0 * max_vert_phi)
         transverse_links_note = ""
-        crack_items = [
-            self.crack_simplified_status(sol_x_pos),
-            self.crack_simplified_status(sol_x_neg),
-            self.crack_simplified_status(sol_y_pos),
-            self.crack_simplified_status(sol_y_neg),
-        ]
-        crack_x_pos = self.crack_check_detail(mx_pos, sol_x_pos, "+", "X")
-        crack_x_neg = self.crack_check_detail(mx_neg, sol_x_neg, "-", "X")
-        crack_y_pos = self.crack_check_detail(my_pos, sol_y_pos, "+", "Y")
-        crack_y_neg = self.crack_check_detail(my_neg, sol_y_neg, "-", "Y")
+
+        def empty_crack_detail(face: str, direction: str, rebar_text: str, reason: str) -> Dict[str, object]:
+            return {
+                "Face": face, "Direction": direction, "Rebar": rebar_text,
+                "As_total_mm2_m": float("nan"), "As_base_mm2_m": float("nan"), "As_add_mm2_m": float("nan"),
+                "phi_control_mm": float("nan"), "s_eff_mm": float("nan"), "n_families": float("nan"),
+                "sigma_s_MPa": float("nan"), "phi_lim_EC2_mm": float("nan"), "s_lim_EC2_mm": float("nan"),
+                "sr_max_mm": float("nan"), "wk_mm": float("nan"), "wmax_mm": self.wmax_mm,
+                "Status": "Não avaliado", "Reason": reason, "Note": reason,
+            }
+
+        if self.wk_check_enabled:
+            if self.is_qp_case(row.get("case", "")):
+                # O cálculo explícito de wk só é feito para a combinação quase-permanente indicada.
+                crack_x_pos = self.crack_check_detail(mx_pos, sol_x_pos, "+", "X")
+                crack_x_neg = self.crack_check_detail(mx_neg, sol_x_neg, "-", "X")
+                crack_y_pos = self.crack_check_detail(my_pos, sol_y_pos, "+", "Y")
+                crack_y_neg = self.crack_check_detail(my_neg, sol_y_neg, "-", "Y")
+                wk_values = [
+                    float(crack_x_pos["wk_mm"]), float(crack_x_neg["wk_mm"]),
+                    float(crack_y_pos["wk_mm"]), float(crack_y_neg["wk_mm"]),
+                ]
+                crack_full_status, crack_full_note = self.crack_full_status(wk_values, row.get("case", ""))
+                crack_rank = {"OK": 0, "OK*": 1, "Não avaliado": 1, "Verificar": 2}
+                crack_status_faces = max(
+                    [crack_x_pos["Status"], crack_x_neg["Status"], crack_y_pos["Status"], crack_y_neg["Status"]],
+                    key=lambda st: crack_rank.get(st, 2),
+                )
+                crack_status = max([crack_status_faces, crack_full_status], key=lambda st: crack_rank.get(st, 2))
+                crack_note = " | ".join(sorted(set([
+                    str(crack_x_pos["Reason"]), str(crack_x_neg["Reason"]),
+                    str(crack_y_pos["Reason"]), str(crack_y_neg["Reason"]),
+                    crack_full_note,
+                ])))
+            else:
+                reason = f"wk não avaliado nesta linha; usar apenas a combinação quase-permanente {self.qp_case}"
+                crack_x_pos = empty_crack_detail("+", "X", sol_x_pos.text, reason)
+                crack_x_neg = empty_crack_detail("-", "X", sol_x_neg.text, reason)
+                crack_y_pos = empty_crack_detail("+", "Y", sol_y_pos.text, reason)
+                crack_y_neg = empty_crack_detail("-", "Y", sol_y_neg.text, reason)
+                crack_status = "Não avaliado"
+                crack_note = reason
+        else:
+            # Sem cálculo explícito de wk: fica apenas o controlo simplificado por diâmetro/espaçamento.
+            crack_items = [
+                self.crack_simplified_status(sol_x_pos),
+                self.crack_simplified_status(sol_x_neg),
+                self.crack_simplified_status(sol_y_pos),
+                self.crack_simplified_status(sol_y_neg),
+            ]
+            crack_rank = {"OK": 0, "OK*": 1, "Não avaliado": 1, "Verificar": 2}
+            crack_status = max((st for st, _ in crack_items), key=lambda st: crack_rank.get(st, 2))
+            crack_note = " | ".join(sorted(set(note for _, note in crack_items)))
+            reason = "wk não calculado; controlo simplificado por diâmetro/espaçamento"
+            crack_x_pos = empty_crack_detail("+", "X", sol_x_pos.text, reason)
+            crack_x_neg = empty_crack_detail("-", "X", sol_x_neg.text, reason)
+            crack_y_pos = empty_crack_detail("+", "Y", sol_y_pos.text, reason)
+            crack_y_neg = empty_crack_detail("-", "Y", sol_y_neg.text, reason)
+
         wk_x_pos = float(crack_x_pos["wk_mm"]); sig_x_pos = float(crack_x_pos["sigma_s_MPa"]); sr_x_pos = float(crack_x_pos["sr_max_mm"])
         wk_x_neg = float(crack_x_neg["wk_mm"]); sig_x_neg = float(crack_x_neg["sigma_s_MPa"]); sr_x_neg = float(crack_x_neg["sr_max_mm"])
         wk_y_pos = float(crack_y_pos["wk_mm"]); sig_y_pos = float(crack_y_pos["sigma_s_MPa"]); sr_y_pos = float(crack_y_pos["sr_max_mm"])
         wk_y_neg = float(crack_y_neg["wk_mm"]); sig_y_neg = float(crack_y_neg["sigma_s_MPa"]); sr_y_neg = float(crack_y_neg["sr_max_mm"])
-        crack_full_status, crack_full_note = self.crack_full_status([wk_x_pos, wk_x_neg, wk_y_pos, wk_y_neg], row.get("case", ""))
-        crack_rank = {"OK": 0, "OK*": 1, "Não avaliado": 1, "Verificar": 2}
-        crack_status_simpl = max((st for st, _ in crack_items), key=lambda st: crack_rank.get(st, 2))
-        crack_status = max([crack_status_simpl, crack_full_status], key=lambda st: crack_rank.get(st, 2))
-        crack_note = " | ".join(sorted(set(note for _, note in crack_items))) + " | " + crack_full_note
+        wk_candidates = [v for v in [wk_x_pos, wk_x_neg, wk_y_pos, wk_y_neg] if math.isfinite(v)]
+        wk_max_value = max(wk_candidates) if wk_candidates else float("nan")
 
         if transverse_links_required:
             transverse_links_note = "requer estribos/ganchos conforme pilares; verificar 9.5.3"
@@ -1045,7 +1196,13 @@ class WallDesigner:
         axial_prelim_util = sigma_n_mpa / self.cp["fcd"] if self.cp["fcd"] > 0 else 0.0
 
         notes = []
-        zero_efforts = max(abs(mxx), abs(myy), abs(mxy)) < 1e-9 and max(abs(qxx), abs(qyy)) < 1e-9
+        missing_qxx = bool(row.get("__missing_qxx", False))
+        missing_qyy = bool(row.get("__missing_qyy", False))
+        if has_explicit_wa:
+            notes.append("momentos Wood-Armer M+/M- importados; MXY não é reaplicado")
+        if missing_qxx or missing_qyy:
+            notes.append("QXX/QYY não fornecido: esforço transverso não verificado nesta linha")
+        zero_efforts = max(abs(mxx), abs(myy), abs(mxy), mx_pos, mx_neg, my_pos, my_neg) < 1e-9 and max(abs(qxx), abs(qyy)) < 1e-9
         if self.moment_factor != 1.0 or self.shear_factor != 1.0:
             notes.append(f"unidades convertidas para kNm/m e kN/m: M x{self.moment_factor:g}, Q x{self.shear_factor:g}")
         if self.wk_check_enabled:
@@ -1054,7 +1211,7 @@ class WallDesigner:
             elif self.is_qp_case(row.get("case", "")):
                 notes.append(f"wk avaliado para a combinação quase-permanente {self.qp_case}")
         else:
-            notes.append("wk não seleccionado: fendilhação controlada apenas por diâmetro/espaçamento")
+            notes.append("wk não seleccionado: sem cálculo explícito; controlo indirecto por diâmetro/espaçamento")
         if axial_prelim_util > 0.60:
             notes.append("tensão normal média elevada; requer verificação de flexão composta/estabilidade")
         elif abs(n_vertical) > 1e-9:
@@ -1116,8 +1273,12 @@ class WallDesigner:
             reason_items.append(crack_full_note if self.wk_check_enabled else "controlo simplificado de fendilhação não satisfeito")
             action_items.append("usar combinação quase-permanente de ELS, reduzir diâmetro/espaçamento ou aumentar a armadura")
         elif crack_status == "OK*":
-            reason_items.append("controlo de fendilhação preliminar no limite")
-            action_items.append("confirmar por wk em ELS se a fendilhação for condicionante")
+            if not self.wk_check_enabled:
+                reason_items.append("wk não calculado; controlo indirecto por diâmetro/espaçamento")
+                action_items.append("confirmar wk com combinação quase-permanente se a fendilhação for condicionante")
+            else:
+                reason_items.append("controlo de fendilhação preliminar no limite")
+                action_items.append("confirmar por wk em ELS se a fendilhação for condicionante")
         if axial_prelim_util > 0.60:
             reason_items.append("tensão normal média elevada detectada")
             action_items.append("realizar verificação N-M/estabilidade fora do âmbito desta versão")
@@ -1152,11 +1313,16 @@ class WallDesigner:
             "MXX_raw": mxx_raw,
             "MYY_raw": myy_raw,
             "MXY_raw": mxy_raw,
+            "MXX+_WA_raw": safe_float(row.get("mxx_pos_wa", 0.0), 0.0),
+            "MXX-_WA_raw": safe_float(row.get("mxx_neg_wa", 0.0), 0.0),
+            "MYY+_WA_raw": safe_float(row.get("myy_pos_wa", 0.0), 0.0),
+            "MYY-_WA_raw": safe_float(row.get("myy_neg_wa", 0.0), 0.0),
             "QXX_raw": qxx_raw,
             "QYY_raw": qyy_raw,
             "Moment_unit": self.moment_unit,
             "Shear_unit": self.shear_unit,
             "Combo_type": self.combo_type,
+            "Input_moment_format": "Wood-Armer M+/M-" if has_explicit_wa else "MXX/MYY/MXY",
             "QP_crack_case": self.qp_case,
             "wk_check_enabled": "Sim" if self.wk_check_enabled else "Não",
             "is_QP_crack_case": "Sim" if self.is_qp_case(row.get("case", "")) else "Não",
@@ -1230,7 +1396,7 @@ class WallDesigner:
             "wk_x-_mm": wk_x_neg,
             "wk_y+_mm": wk_y_pos,
             "wk_y-_mm": wk_y_neg,
-            "wk_max_mm": max(wk_x_pos, wk_x_neg, wk_y_pos, wk_y_neg),
+            "wk_max_mm": wk_max_value,
             "sigma_s_x+_MPa": sig_x_pos,
             "sigma_s_x-_MPa": sig_x_neg,
             "sigma_s_y+_MPa": sig_y_pos,
@@ -1327,6 +1493,7 @@ class WallsEC2App(tk.Tk):
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_text_var = tk.StringVar(value="0%")
         self.progress_var.trace_add("write", lambda *args: self.progress_text_var.set(f"{self.progress_var.get():.0f}%"))
+        self._cell_popup = None
 
         self._build_ui()
 
@@ -1624,7 +1791,7 @@ class WallsEC2App(tk.Tk):
 
         ttk.Label(
             outer,
-            text="Instruções de importação da tabela de esforços",
+            text="Instruções de utilização e importação",
             style="Header.TLabel",
         ).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
@@ -1641,44 +1808,56 @@ class WallsEC2App(tk.Tk):
 
         instructions = (
             "OBJECTIVO\n"
-            "Esta ferramenta dimensiona armadura distribuída de paredes/painéis de betão armado a partir de esforços por metro.\n\n"
-            "COMO USAR\n"
-            "1. Copiar a tabela de esforços do software de análise ou de uma folha de cálculo.\n"
-            "2. Abrir a aba 'Colar'.\n"
-            "3. Colar a tabela.\n"
-            "4. Clicar em 'Ler tabela colada'.\n"
-            "5. Confirmar unidades, eixos locais e combinação quase-permanente, quando aplicável.\n"
-            "6. Clicar em 'Calcular'.\n\n"
-            "COLUNAS RECOMENDADAS\n"
-            "A tabela deve conter, sempre que possível:\n"
-            "- Panel ou Painel\n"
-            "- Node ou Nó\n"
-            "- Case ou Caso/Combinação\n"
-            "- MXX\n"
-            "- MYY\n"
-            "- MXY\n"
-            "- QXX\n"
-            "- QYY\n\n"
-            "UNIDADES ESPERADAS\n"
-            "- MXX, MYY e MXY: normalmente em kNm/m.\n"
-            "- QXX e QYY: normalmente em kN/m.\n"
-            "As unidades podem ser alteradas no painel lateral.\n\n"
-            "TABELA TIPO\n"
+            "O WallsEC2 dimensiona armadura distribuída em paredes/painéis de betão armado a partir de esforços por metro. "
+            "O cálculo é feito por faixas de 1 m, com verificação de armadura, esforço transverso e fendilhação em serviço.\n\n"
+
+            "FLUXO DE TRABALHO\n"
+            "1. Exportar ou copiar a tabela de esforços do software de análise estrutural ou de uma folha de cálculo.\n"
+            "2. Colar os dados na aba 'Colar' ou importar ficheiro .xlsx/.csv.\n"
+            "3. Confirmar espessura, recobrimento, classe de betão, aço, unidades e orientação dos eixos locais.\n"
+            "4. Para fendilhação, activar 'Verificar wk com combinação quase-permanente' e indicar o número da combinação de ELS.\n"
+            "5. Calcular, rever as abas Resumo, Armaduras, Diagnóstico e Validação.\n"
+            "6. Exportar o Excel para auditoria completa e o PDF como anexo de cálculo resumido.\n\n"
+
+            "FORMATO 1 — MOMENTOS DE PLACA MXX/MYY/MXY\n"
+            "Usar este formato quando a tabela contém os momentos de placa e o programa deve tratar o efeito de MXY.\n\n"
             "Panel\tNode\tCase\tMXX\tMYY\tMXY\tQXX\tQYY\n"
             "43\t49\t101\t-12.40\t3.80\t1.25\t18.50\t6.20\n"
-            "43\t49\t302 (QP)\t-5.10\t1.40\t0.52\t7.20\t2.10\n"
-            "44\t51\t101\t8.75\t-2.60\t0.90\t12.40\t5.80\n\n"
-            "FORMATO ALTERNATIVO ACEITE\n"
-            "Também é aceite uma coluna única do tipo Panel/Node/Case, por exemplo:\n\n"
-            "Panel/Node/Case\tMXX\tMYY\tMXY\tQXX\tQYY\n"
-            "43/49/101\t-12.40\t3.80\t1.25\t18.50\t6.20\n"
-            "43/49/302 (QP)\t-5.10\t1.40\t0.52\t7.20\t2.10\n\n"
-            "NOTAS IMPORTANTES\n"
-            "- Confirmar a orientação dos eixos locais dos painéis antes de adoptar as armaduras.\n"
-            "- A face +/− depende da normal local do painel.\n"
-            "- Para verificação explícita de wk, indicar o número da combinação quase-permanente.\n"
-            "- Sem esforços normais/membrana, a ferramenta não verifica compressão global, estabilidade ou segunda ordem.\n"
-            "- O relatório PDF é resumido; o Excel exportado mantém os resultados completos para auditoria.\n"
+            "43\t49\t302 (QP)\t-5.10\t1.40\t0.52\t7.20\t2.10\n\n"
+            "Neste caso, seleccionar o método de tratamento de MXY: 'Conservativo |MXY|' ou 'Momentos principais'.\n\n"
+
+            "FORMATO 2 — MOMENTOS WOOD-ARMER JÁ SEPARADOS\n"
+            "Usar este formato quando a tabela já contém os momentos positivos e negativos para cálculo de armadura.\n\n"
+            "Panel/Node/Case\tMXX+\tMXX-\tMYY+\tMYY-\tQXX\tQYY\n"
+            "18/12849/101\t0.00\t-18.71\t0.00\t-64.44\t95.73\t542.31\n"
+            "18/12849/302 (QP)\t0.00\t-12.02\t0.00\t-41.10\t50.00\t220.00\n\n"
+            "Quando MXX+, MXX-, MYY+ e MYY- são detectados, o programa usa estes valores directamente e não reaplica MXY.\n\n"
+
+            "UNIDADES\n"
+            "- Momentos: normalmente kNm/m.\n"
+            "- Esforços transversos: normalmente kN/m.\n"
+            "- O programa converte internamente para kNm/m e kN/m conforme a opção seleccionada.\n"
+            "- Em CSV são aceites separadores por ponto e vírgula, vírgula, tabulação ou barra vertical.\n\n"
+
+            "FENDILHAÇÃO — ELS QUASE-PERMANENTE\n"
+            "A largura de fenda wk deve ser verificada em ELS, normalmente com a combinação quase-permanente.\n"
+            "Para isso, a tabela importada deve conter as linhas dessa combinação, por exemplo 302 ou 302 (QP).\n"
+            "Com a opção wk activada, o programa só calcula wk nas linhas da combinação indicada. As linhas ELU ficam como 'Não avaliado' para wk.\n\n"
+            "Leitura das direcções:\n"
+            "- wk_x+ / wk_x-: fendilhação controlada pela armadura X nas faces + e -.\n"
+            "- wk_y+ / wk_y-: fendilhação controlada pela armadura Y nas faces + e -.\n"
+            "- Se o eixo local Y for vertical, Y corresponde à armadura vertical e X à armadura horizontal.\n"
+            "- A face + é o lado da normal local positiva do painel; a face - é o lado oposto.\n\n"
+
+            "EIXOS LOCAIS E FACES\n"
+            "Confirmar a orientação dos eixos locais antes de adoptar resultados. A opção 'Eixo local Y = vertical' deve estar activa quando o eixo Y local do painel é vertical. "
+            "Usar 'Trocar eixos locais X ↔ Y' apenas se a tabela estiver exportada com a orientação contrária à pretendida.\n\n"
+
+            "LIMITAÇÕES DESTA VERSÃO\n"
+            "- Não substitui a verificação global de paredes comprimidas.\n"
+            "- Não inclui flexão composta N-M, estabilidade, segunda ordem ou encurvadura.\n"
+            "- A verificação de wk é uma verificação por flexão em ELS; retracção, temperatura, restrição na base, juntas e requisitos especiais de estanquidade devem ser avaliados separadamente quando forem condicionantes.\n"
+            "- O PDF apresenta o resumo de projecto; o Excel contém os dados completos para auditoria.\n"
         )
         txt.insert("1.0", instructions)
         txt.config(state="disabled")
@@ -1714,7 +1893,176 @@ class WallsEC2App(tk.Tk):
         hsb.grid(row=1, column=0, sticky="ew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
+
+        # Informação completa de células truncadas: clique simples em texto longo ou duplo clique em qualquer célula.
+        tree.bind("<ButtonRelease-1>", self._on_tree_cell_click, add="+")
+        tree.bind("<Double-1>", self._on_tree_cell_double_click, add="+")
+        tree.bind("<Button-3>", self._on_tree_cell_double_click, add="+")
         return tree
+
+    def _tree_cell_data_from_event(self, event):
+        tree = event.widget
+        try:
+            region = tree.identify("region", event.x, event.y)
+        except Exception:
+            region = tree.identify_region(event.x, event.y)
+        if region not in ("cell", "tree"):
+            return None
+
+        row_id = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)
+        if not row_id or not col_id or not col_id.startswith("#"):
+            return None
+
+        try:
+            col_index = int(col_id[1:]) - 1
+        except Exception:
+            return None
+
+        cols = list(tree["columns"])
+        values = list(tree.item(row_id, "values"))
+        if col_index < 0 or col_index >= len(cols) or col_index >= len(values):
+            return None
+
+        column = cols[col_index]
+        value = str(values[col_index])
+        row_data = {str(c): str(values[i]) if i < len(values) else "" for i, c in enumerate(cols)}
+        return tree, row_id, column, value, row_data
+
+    def _is_tree_value_visually_truncated(self, tree, column, value: str) -> bool:
+        value = str(value or "")
+        if not value.strip():
+            return False
+        if "\n" in value or " | " in value or ";" in value:
+            return True
+        if len(value) > 28:
+            return True
+        try:
+            import tkinter.font as tkfont
+            font = tkfont.nametofont("TkDefaultFont")
+            text_width = font.measure(value)
+            col_width = int(tree.column(column, option="width") or 0)
+            return text_width > max(40, col_width - 16)
+        except Exception:
+            return len(value) > 28
+
+    def _on_tree_cell_click(self, event):
+        data = self._tree_cell_data_from_event(event)
+        if not data:
+            return
+        tree, row_id, column, value, row_data = data
+        if self._is_tree_value_visually_truncated(tree, column, value):
+            self._show_tree_cell_popup(tree, row_id, column, value, row_data, event)
+
+    def _on_tree_cell_double_click(self, event):
+        data = self._tree_cell_data_from_event(event)
+        if not data:
+            return
+        tree, row_id, column, value, row_data = data
+        if str(value).strip():
+            self._show_tree_cell_popup(tree, row_id, column, value, row_data, event)
+
+    def _destroy_cell_popup(self):
+        try:
+            if self._cell_popup is not None and self._cell_popup.winfo_exists():
+                self._cell_popup.destroy()
+        except Exception:
+            pass
+        self._cell_popup = None
+
+    def _show_tree_cell_popup(self, tree, row_id, column, value, row_data, event):
+        self._destroy_cell_popup()
+
+        popup = tk.Toplevel(self)
+        self._cell_popup = popup
+        popup.title("Detalhe da informação")
+        popup.transient(self)
+        popup.resizable(True, True)
+        popup.attributes("-topmost", True)
+
+        # Posicionamento próximo do cursor, mas dentro do ecrã.
+        width = 720
+        height = 360
+        x = self.winfo_pointerx() + 12
+        y = self.winfo_pointery() + 12
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        if x + width > screen_w:
+            x = max(10, screen_w - width - 20)
+        if y + height > screen_h:
+            y = max(10, screen_h - height - 60)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+        main = ttk.Frame(popup, padding=10)
+        main.pack(fill="both", expand=True)
+        main.rowconfigure(2, weight=1)
+        main.columnconfigure(0, weight=1)
+
+        # Contexto curto da linha.
+        panel = row_data.get("Panel", row_data.get("Painel", row_data.get("panel", "")))
+        node = row_data.get("Node", row_data.get("Nó", row_data.get("node", "")))
+        case = row_data.get("Case", row_data.get("Caso", row_data.get("case", "")))
+        status = row_data.get("Status", row_data.get("Status_global", row_data.get("Estado", "")))
+        context_bits = []
+        if panel: context_bits.append(f"Painel: {panel}")
+        if node: context_bits.append(f"Nó: {node}")
+        if case: context_bits.append(f"Caso: {case}")
+        if status: context_bits.append(f"Estado: {status}")
+        context = " | ".join(context_bits) if context_bits else "Linha seleccionada"
+
+        ttk.Label(main, text=f"Coluna: {column}", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(main, text=context, style="Subtle.TLabel", wraplength=680).grid(row=1, column=0, sticky="ew", pady=(2, 8))
+
+        nb = ttk.Notebook(main)
+        nb.grid(row=2, column=0, sticky="nsew")
+
+        tab_value = ttk.Frame(nb, padding=6)
+        tab_row = ttk.Frame(nb, padding=6)
+        nb.add(tab_value, text="Valor completo")
+        nb.add(tab_row, text="Linha completa")
+
+        def _make_text(parent, content):
+            parent.rowconfigure(0, weight=1)
+            parent.columnconfigure(0, weight=1)
+            txt = tk.Text(parent, wrap="word", height=8, font=("Segoe UI", 10), relief="solid", borderwidth=1)
+            vsb = ttk.Scrollbar(parent, orient="vertical", command=txt.yview)
+            txt.configure(yscrollcommand=vsb.set)
+            txt.grid(row=0, column=0, sticky="nsew")
+            vsb.grid(row=0, column=1, sticky="ns")
+            txt.insert("1.0", content)
+            txt.config(state="disabled")
+            return txt
+
+        value_text = _make_text(tab_value, str(value))
+        row_lines = [f"{k}: {v}" for k, v in row_data.items()]
+        row_text = _make_text(tab_row, "\n".join(row_lines))
+
+        buttons = ttk.Frame(main)
+        buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        buttons.columnconfigure(0, weight=1)
+
+        def copy_value():
+            self.clipboard_clear()
+            self.clipboard_append(str(value))
+            self.status_var.set("Valor copiado para a área de transferência.")
+
+        def copy_row():
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(row_lines))
+            self.status_var.set("Linha completa copiada para a área de transferência.")
+
+        ttk.Label(buttons, text="Dica: clique em textos longos, faça duplo clique ou botão direito para abrir este detalhe.", style="Subtle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(buttons, text="Copiar valor", command=copy_value).grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(buttons, text="Copiar linha", command=copy_row).grid(row=0, column=2, padx=(6, 0))
+        ttk.Button(buttons, text="Fechar", command=self._destroy_cell_popup).grid(row=0, column=3, padx=(6, 0))
+
+        popup.bind("<Escape>", lambda _e: self._destroy_cell_popup())
+        popup.protocol("WM_DELETE_WINDOW", self._destroy_cell_popup)
+        popup.lift()
+        try:
+            value_text.focus_set()
+        except Exception:
+            pass
 
     def show_df(self, tree: ttk.Treeview, df: pd.DataFrame):
         tree.delete(*tree.get_children())
@@ -1772,11 +2120,7 @@ class WallsEC2App(tk.Tk):
             if path.lower().endswith((".xlsx", ".xls")):
                 df = pd.read_excel(path, dtype=str)
             else:
-                # tenta separadores correntes
-                try:
-                    df = pd.read_csv(path, dtype=str)
-                except Exception:
-                    df = pd.read_csv(path, sep=";", dtype=str)
+                df = read_csv_robust(path)
             self.load_df(df)
         except Exception as e:
             messagebox.showerror("Erro", str(e))
@@ -1846,7 +2190,7 @@ class WallsEC2App(tk.Tk):
         return pd.DataFrame([
             {"Grandeza": "Momentos MXX/MYY/MXY", "Unidade selecionada": designer.moment_unit, "Factor aplicado": designer.moment_factor, "Máximo convertido": max_m, "Unidade interna": "kNm/m", "Nota": notes[0]},
             {"Grandeza": "Corte QXX/QYY", "Unidade selecionada": designer.shear_unit, "Factor aplicado": designer.shear_factor, "Máximo convertido": max_q, "Unidade interna": "kN/m", "Nota": " | ".join(notes)},
-            {"Grandeza": "Fendilhação", "Unidade selecionada": "wk seleccionado" if designer.wk_check_enabled else "controlo simplificado", "Factor aplicado": "-", "Máximo convertido": "-", "Unidade interna": "-", "Nota": f"wk só é avaliado para a combinação quase-permanente indicada: {designer.qp_case or 'não indicada'}. Sem selecção, fica o controlo por diâmetro/espaçamento."},
+            {"Grandeza": "Fendilhação", "Unidade selecionada": "wk seleccionado" if designer.wk_check_enabled else "controlo simplificado", "Factor aplicado": "-", "Máximo convertido": "-", "Unidade interna": "-", "Nota": f"wk só é avaliado para a combinação quase-permanente indicada: {designer.qp_case or 'não indicada'}. Sem selecção, wk não é calculado; fica apenas o controlo indirecto por diâmetro/espaçamento."},
         ])
 
 
@@ -1855,10 +2199,26 @@ class WallsEC2App(tk.Tk):
         if df_clean is None or df_clean.empty:
             return pd.DataFrame([{"Categoria": "Tabela", "Item": "linhas", "Estado": "Não conforme", "Resultado": "0", "Nota": "Sem dados importados."}])
 
-        required = ["panel", "case", "mxx", "myy", "mxy", "qxx", "qyy"]
-        for c in required:
+        moment_base_cols = ["mxx", "myy", "mxy"]
+        moment_wa_cols = ["mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa"]
+        has_base_moments = any(not bool(df_clean.get(f"__missing_{c}", pd.Series([True])).iloc[0]) for c in moment_base_cols if f"__missing_{c}" in df_clean.columns)
+        has_wa_moments = all(not bool(df_clean.get(f"__missing_{c}", pd.Series([True])).iloc[0]) for c in moment_wa_cols if f"__missing_{c}" in df_clean.columns)
+
+        required_id = ["panel", "case"]
+        for c in required_id:
             estado = "OK" if c in df_clean.columns else "Não conforme"
             rows.append({"Categoria": "Colunas", "Item": c, "Estado": estado, "Resultado": "presente" if estado == "OK" else "em falta", "Nota": "coluna reconhecida" if estado == "OK" else "corrigir cabeçalho ou formato de importação"})
+
+        rows.append({
+            "Categoria": "Colunas",
+            "Item": "momentos",
+            "Estado": "OK" if (has_base_moments or has_wa_moments) else "Não conforme",
+            "Resultado": "MXX/MYY/MXY" if has_base_moments else ("Wood-Armer M+/M-" if has_wa_moments else "em falta"),
+            "Nota": "se forem importados M+/M- de Wood-Armer, o programa usa esses valores directamente e não reaplica MXY",
+        })
+        for c in ["qxx", "qyy"]:
+            missing = bool(df_clean.get(f"__missing_{c}", pd.Series([True])).iloc[0]) if f"__missing_{c}" in df_clean.columns else True
+            rows.append({"Categoria": "Colunas", "Item": c, "Estado": "OK" if not missing else "OK*", "Resultado": "presente" if not missing else "não fornecido", "Nota": "necessário para verificação ao esforço transverso" if missing else "coluna reconhecida"})
 
         n_lines = len(df_clean)
         n_panels = df_clean["panel"].astype(str).nunique() if "panel" in df_clean.columns else 0
@@ -2151,7 +2511,7 @@ class WallsEC2App(tk.Tk):
             ("Espaçamento horizontal", f"smax = {sx_hor:.0f} mm", "Adoptado 400 mm, eventualmente limitado a 250 mm quando o controlo de fendilhação está activo."),
             ("Distância livre", "Verificada na escolha automática", "A solução automática rejeita combinações em que a distância livre seja inferior a max(Ø; dg+5; 20 mm)."),
             ("Corte", "VRd,c tipo laje + VRd,max", "A verificação ao esforço transverso é feita sem armadura específica. Se VEd>VRd,c, o programa assinala 'Verificar'; se VEd>VRd,max simplificado, assinala 'Não conforme'."),
-            ("Fendilhação", f"wmax = {designer.wmax_mm:.2f} mm", f"Sem selecção de wk: controlo por diâmetro/espaçamento. Com wk seleccionado: cálculo apenas para a combinação quase-permanente indicada ({designer.qp_case or 'não indicada'})."),
+            ("Fendilhação", f"wmax = {designer.wmax_mm:.2f} mm", f"Sem selecção de wk: não é calculada a largura de fenda; fica apenas o controlo indirecto por diâmetro/espaçamento. Com wk seleccionado: cálculo apenas para a combinação quase-permanente indicada ({designer.qp_case or 'não indicada'})."),
             ("Armadura mínima por fendilhação", f"As,min,crack = {designer.crack_min_as_per_face():.1f} mm²/m/face", "Aplicada aproximação de EC2 7.3.2 com Act igual à meia espessura traccionada por face."),
             ("Unidades", f"M: {designer.moment_unit}; Q: {designer.shear_unit}", "Os valores são convertidos internamente para kNm/m e kN/m. Confirmar sempre as unidades da tabela de origem antes de adoptar os resultados."),
             ("Optimização de armaduras", "Base + reforços" if designer.optimize_rebar else "Automática directa", f"Base vertical Ø{designer.base_vertical_phi:.0f}//{designer.base_vertical_spacing:.0f}; base horizontal Ø{designer.base_horizontal_phi:.0f}//{designer.base_horizontal_spacing:.0f}. Quando a base é insuficiente, o programa tenta adicionar reforço local antes de declarar insuficiência à flexão ou corte."),
@@ -2296,7 +2656,7 @@ class WallsEC2App(tk.Tk):
             metadata = pd.DataFrame([
                 ["Programa", APP_NAME],
                 ["Versão", APP_VERSION],
-                ["Autor", APP_AUTHOR],
+                ["Autor", APP_REPORT_AUTHOR],
                 ["Repositório", GITHUB_URL],
                 ["Data de exportação", export_dt.strftime("%Y-%m-%d %H:%M")],
                 ["Tipo de ficheiro", "Resultados de cálculo"],
@@ -2415,7 +2775,7 @@ class WallsEC2App(tk.Tk):
                 props = wb.properties
                 props.title = f"{APP_NAME} - Resultados de Cálculo"
                 props.subject = APP_SUBJECT
-                props.creator = APP_AUTHOR
+                props.creator = APP_REPORT_AUTHOR
                 props.lastModifiedBy = APP_NAME
                 props.description = APP_XLSX_DESCRIPTION
                 props.keywords = APP_KEYWORDS
@@ -2602,7 +2962,7 @@ class WallsEC2App(tk.Tk):
             def header_footer(canvas, doc_obj):
                 canvas.saveState()
                 canvas.setTitle(f"{APP_NAME} - Relatório de Cálculo")
-                canvas.setAuthor(APP_AUTHOR)
+                canvas.setAuthor(APP_REPORT_AUTHOR)
                 canvas.setSubject(APP_SUBJECT)
                 canvas.setCreator(f"{APP_NAME} {APP_VERSION}")
                 canvas.setKeywords(APP_KEYWORDS)
@@ -2717,7 +3077,15 @@ class WallsEC2App(tk.Tk):
                 "MXY_kNm_m": "MXY",
                 "QXX_kN_m": "QXX",
                 "QYY_kN_m": "QYY",
-                "wk_max_mm": "wk",
+                "wk_x+_mm": "wk X+",
+                "wk_x-_mm": "wk X-",
+                "wk_y+_mm": "wk Y+",
+                "wk_y-_mm": "wk Y-",
+                "wk_max_mm": "wk máx.",
+                "wmax_mm": "wmax",
+                "Crack_control_status": "Estado wk",
+                "Crack_control_note": "Nota wk",
+                "Crack_gov": "wk gov.",
                 "Optimization_mode": "Modo",
                 "Acção recomendada": "Nota",
                 "Acao recomendada": "Nota",
@@ -2784,6 +3152,64 @@ class WallsEC2App(tk.Tk):
                     story.append(Paragraph(f"Nota: quadro truncado no relatório. Linhas apresentadas: {max_rows} de {len(df)}. Consultar ficheiro Excel para resultados completos.", styles["Small"]))
                 story.append(Spacer(1, 6))
 
+            def build_pdf_cracking_summary():
+                """Resumo de fendilhação para apresentação no PDF.
+
+                O PDF deve apresentar explicitamente os valores de wk da combinação quase-permanente,
+                sem misturar linhas ELU. O detalhe completo continua disponível no Excel.
+                """
+                if self.df_results is None or self.df_results.empty:
+                    return pd.DataFrame()
+                df = self.df_results.copy()
+                if "is_QP_crack_case" in df.columns:
+                    df = df[df["is_QP_crack_case"].astype(str).str.lower().eq("sim")].copy()
+                if df.empty:
+                    return pd.DataFrame([{
+                        "Panel": "-", "Node": "-", "Case": self.var_qp_case.get() or "não indicada",
+                        "wk_x+_mm": float("nan"), "wk_x-_mm": float("nan"),
+                        "wk_y+_mm": float("nan"), "wk_y-_mm": float("nan"),
+                        "wk_max_mm": float("nan"), "wmax_mm": safe_float(self.var_wmax.get(), 0.30),
+                        "Crack_gov": "-", "Crack_control_status": "Não avaliado",
+                        "Crack_control_note": "Sem cálculo explícito de wk. Seleccionar a combinação quase-permanente para verificação ELS."
+                    }])
+
+                wk_cols = ["wk_x+_mm", "wk_x-_mm", "wk_y+_mm", "wk_y-_mm"]
+                rows = []
+                for panel, grp in df.groupby("Panel", dropna=False):
+                    g = grp.copy()
+                    if "wk_max_mm" not in g.columns:
+                        continue
+                    valid = g[pd.to_numeric(g["wk_max_mm"], errors="coerce").notna()].copy()
+                    if valid.empty:
+                        continue
+                    idx = pd.to_numeric(valid["wk_max_mm"], errors="coerce").idxmax()
+                    r = valid.loc[idx]
+                    vals = {c: safe_float(r.get(c, float("nan")), float("nan")) for c in wk_cols}
+                    finite_vals = {c: v for c, v in vals.items() if math.isfinite(v)}
+                    if finite_vals:
+                        gov_col = max(finite_vals, key=finite_vals.get)
+                        gov_txt = gov_col.replace("wk_", "").replace("_mm", "")
+                    else:
+                        gov_txt = "-"
+                    rows.append({
+                        "Panel": r.get("Panel", panel),
+                        "Node": r.get("Node", ""),
+                        "Case": r.get("Case", ""),
+                        "wk_x+_mm": r.get("wk_x+_mm", float("nan")),
+                        "wk_x-_mm": r.get("wk_x-_mm", float("nan")),
+                        "wk_y+_mm": r.get("wk_y+_mm", float("nan")),
+                        "wk_y-_mm": r.get("wk_y-_mm", float("nan")),
+                        "wk_max_mm": r.get("wk_max_mm", float("nan")),
+                        "wmax_mm": r.get("wmax_mm", safe_float(self.var_wmax.get(), 0.30)),
+                        "Crack_gov": gov_txt,
+                        "Crack_control_status": r.get("Crack_control_status", ""),
+                        "Crack_control_note": r.get("Crack_control_note", ""),
+                    })
+                out = pd.DataFrame(rows)
+                if out.empty:
+                    return out
+                return out.sort_values("wk_max_mm", ascending=False).reset_index(drop=True)
+
             story = []
             story.append(Spacer(1, 18))
             story.append(Paragraph("RELATÓRIO DE CÁLCULO", styles["ReportTitle"]))
@@ -2841,32 +3267,39 @@ class WallsEC2App(tk.Tk):
             add_table("2. Armadura adoptada por painel", self.df_governing, cols=[
                 "Panel", "Status", "Motivo_estado", "Acção_recomendada", "util_max", "X+_adopted", "X-_adopted", "Y+_adopted", "Y-_adopted", "Transverse_links", "governing_case"
             ], max_rows=36, note_cols=["Acção_recomendada"], widths=[18*mm, 18*mm, 34*mm, 18*mm, 30*mm, 30*mm, 30*mm, 30*mm, 22*mm, 22*mm])
-            self.progress_var.set(55.0); self.update_idletasks()
+            self.progress_var.set(52.0); self.update_idletasks()
 
-            add_table("3. Zonas de armadura", self.df_zones, cols=[
+            df_cracking_pdf = build_pdf_cracking_summary()
+            add_table("3. Verificação da fendilhação — ELS quase-permanente", df_cracking_pdf, cols=[
+                "Panel", "Node", "Case", "wk_x+_mm", "wk_x-_mm", "wk_y+_mm", "wk_y-_mm", "wk_max_mm", "wmax_mm", "Crack_gov", "Crack_control_status", "Crack_control_note"
+            ], max_rows=36, note_cols=["Crack_control_note"], widths=[16*mm, 16*mm, 22*mm, 18*mm, 18*mm, 18*mm, 18*mm, 18*mm, 16*mm, 18*mm, 22*mm])
+            story.append(Paragraph("Nota: wk_x+/wk_x-/wk_y+/wk_y- correspondem às faces e direcções locais do painel. O valor wk máx. é o valor governante para a combinação quase-permanente indicada.", styles["Small"]))
+            self.progress_var.set(58.0); self.update_idletasks()
+
+            add_table("4. Zonas de armadura", self.df_zones, cols=[
                 "Zona", "Painéis", "Status", "util_max", "X+", "X-", "Y+", "Y-", "Armadura transversal", "Nota"
             ], max_rows=40)
 
-            add_table("4. Optimização de armaduras", self.df_optimization, cols=[
+            add_table("5. Optimização de armaduras", self.df_optimization, cols=[
                 "Panel", "Status", "Optimization_mode", "X+_base", "X+_additional", "X+_rebar", "Y+_base", "Y+_additional", "Y+_rebar", "util_max"
             ], max_rows=36)
-            add_table("5. Diagnóstico", self.df_diagnostic, cols=[
+            add_table("6. Diagnóstico", self.df_diagnostic, cols=[
                 "Painel", "Severidade", "Problema", "Acção recomendada", "Origem"
             ], max_rows=40, widths=[24*mm, 24*mm, 92*mm, 34*mm, 36*mm])
             story.append(PageBreak())
-            self.progress_var.set(65.0); self.update_idletasks()
+            self.progress_var.set(68.0); self.update_idletasks()
 
-            add_table("6. Validação da tabela importada", self.df_data_validation, cols=[
+            add_table("7. Validação da tabela importada", self.df_data_validation, cols=[
                 "Categoria", "Item", "Estado", "Resultado", "Nota"
             ], max_rows=50, widths=[35*mm, 45*mm, 28*mm, 50*mm, 95*mm])
-            add_table("7. Croquis textual por zona", self.df_sketches, cols=[
+            add_table("8. Croquis textual por zona", self.df_sketches, cols=[
                 "Zona", "Painéis", "Croquis_textual", "Nota_desenho"
             ], max_rows=20, widths=[18*mm, 50*mm, 125*mm, 72*mm])
 
-            add_table("8. Verificação de unidades e consistência", self.df_unit_check, cols=[
+            add_table("9. Verificação de unidades e consistência", self.df_unit_check, cols=[
                 "Grandeza", "Unidade selecionada", "Factor aplicado", "Máximo convertido", "Unidade interna", "Nota"
             ], max_rows=10)
-            add_table("9. Notas normativas e hipóteses de cálculo", self.df_notes, cols=[
+            add_table("10. Notas normativas e hipóteses de cálculo", self.df_notes, cols=[
                 "Tema", "Critério adoptado", "Nota"
             ], max_rows=30, widths=[40*mm, 55*mm, 155*mm])
             self.progress_var.set(80.0); self.update_idletasks()
@@ -2875,7 +3308,7 @@ class WallsEC2App(tk.Tk):
             if self.df_results is not None and not self.df_results.empty:
                 story.append(PageBreak())
                 crit = self.df_results.sort_values("util_max", ascending=False).head(20)
-                add_table("10. Apêndice - linhas críticas por utilização", crit, cols=[
+                add_table("11. Apêndice - linhas críticas por utilização", crit, cols=[
                     "Panel", "Node", "Case", "is_QP_crack_case", "MXX_kNm_m", "MYY_kNm_m", "MXY_kNm_m", "QXX_kN_m", "QYY_kN_m", "wk_max_mm", "Status", "Recommended_action"
                 ], max_rows=20, note_cols=["Recommended_action"], widths=[15*mm, 16*mm, 22*mm, 14*mm, 21*mm, 21*mm, 21*mm, 21*mm, 21*mm, 16*mm, 18*mm])
             self.progress_var.set(90.0); self.update_idletasks()
