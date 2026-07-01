@@ -1,39 +1,113 @@
 # WallsEC2
 
-**WallsEC2** é uma ferramenta em Python para dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2, com tratamento de esforços por painel, armaduras distribuídas, esforço transverso, controlo de fendilhação e exportação de relatórios em XLSX e PDF.
+**WallsEC2** é uma ferramenta em Python para dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2, a partir de esforços por metro obtidos em modelos de painéis/placas.
 
-Repositório: [github.com/lutondatomalela/WallsEC2](https://github.com/lutondatomalela/WallsEC2)
+Repositório: [https://github.com/lutondatomalela/WallsEC2](https://github.com/lutondatomalela/WallsEC2)
 
 ## Funcionalidades
 
-- Importação de tabelas de esforços a partir de ficheiros `.xlsx`, `.csv` ou colagem directa no GUI.
-- Dimensionamento de armadura por face e direcção.
-- Tratamento de `MXX`, `MYY`, `MXY`, `QXX` e `QYY`.
-- Opções para consideração conservativa de `MXY` ou momentos principais.
-- Verificação ao esforço transverso.
-- Controlo de fendilhação simplificado e verificação explícita de `wk` para combinação quase-permanente.
-- Optimização de armaduras com solução base e reforços locais.
-- Resumo por painel, zonas de armadura, diagnóstico e validação da tabela importada.
-- Exportação de resultados detalhados para `.xlsx` e `.pdf`.
+* Importação de tabelas de esforços em `.xlsx`, `.csv` ou por colagem directa na interface.
+* Leitura de esforços no formato `MXX`, `MYY`, `MXY`, `QXX` e `QYY`.
+* Leitura alternativa de momentos Wood-Armer já separados: `MXX+`, `MXX-`, `MYY+` e `MYY-`.
+* Dimensionamento de armadura por direcção e por face local do painel.
+* Estratégia de armadura base com reforços locais intercalados.
+* Verificação ao esforço transverso com `VRd,c` e limite simplificado `VRd,max`.
+* Controlo indirecto da fendilhação por diâmetro e espaçamento quando `wk` não é calculado.
+* Verificação explícita de `wk` apenas para a combinação quase-permanente de ELS indicada pelo utilizador.
+* Diagnóstico de dados importados, unidades, eixos locais, casos governantes e avisos de validação.
+* Visualização ampliada de células truncadas na GUI.
+* Exportação de resultados para `.xlsx`, `.csv` e relatório `.pdf`.
 
-## Âmbito
+## Âmbito de cálculo
 
-A ferramenta considera paredes modeladas como painéis/placas e dimensiona faixas de 1 m.  
-Os resultados dependem da orientação dos eixos locais, das unidades adoptadas e da qualidade da tabela de esforços importada.
+A ferramenta considera paredes modeladas como elementos de placa/casca e dimensiona faixas de 1 m. Os resultados dependem da orientação dos eixos locais, da normal local do painel, das unidades adoptadas e da qualidade da tabela de esforços importada.
 
-Não estão incluídas nesta versão:
+A direcção local vertical deve ser confirmada antes do cálculo. Quando o eixo local `Y` é vertical, os resultados `Y+` e `Y-` correspondem à armadura vertical nas faces positiva e negativa do painel. A face `+` é definida pela normal local positiva do elemento.
 
-- verificação global de compressão;
-- flexão composta `N-M`;
-- efeitos de segunda ordem;
-- verificação sísmica específica.
+## Fendilhação
+
+A verificação da fendilhação segue duas lógicas distintas:
+
+1. **Sem cálculo explícito de `wk`**  
+O programa aplica apenas controlo indirecto por armadura mínima, diâmetro e espaçamento. O resultado é assinalado como `OK\*`, e não como `OK` puro, porque `wk` não foi calculado.
+2. **Com cálculo explícito de `wk`**  
+O utilizador deve activar a opção de verificação de `wk` e indicar a combinação quase-permanente de ELS. O programa calcula `wk` apenas nas linhas dessa combinação. Linhas ELU ou outras combinações ficam como `Não avaliado` para fendilhação.
+
+Os campos de fendilhação são interpretados assim:
+
+|Campo|Interpretação|
+|-|-|
+|`wk\_x+`|fendilhação associada à armadura X na face +|
+|`wk\_x-`|fendilhação associada à armadura X na face -|
+|`wk\_y+`|fendilhação associada à armadura Y na face +|
+|`wk\_y-`|fendilhação associada à armadura Y na face -|
+|`wk\_max`|maior valor entre as quatro verificações|
+
+Para paredes de cave, reservatórios, elementos com exigência de estanquidade ou paredes exteriores críticas, recomenda-se a verificação explícita de `wk` com a combinação quase-permanente de ELS.
+
+## Formatos de entrada
+
+### Formato geral com `MXY`
+
+```text
+Panel   Node   Case       MXX      MYY      MXY      QXX      QYY
+43      49     101        -12.40    3.80     1.25    18.50     6.20
+43      49     302 (QP)    -5.10    1.40     0.52     7.20     2.10
+```
+
+Neste caso, o programa trata `MXY` pelo método seleccionado na interface.
+
+### Formato com momentos Wood-Armer separados
+
+```text
+Panel   Node   Case       MXX+     MXX-     MYY+     MYY-
+43      49     101        12.40     3.10     8.50     2.20
+43      49     302 (QP)    5.10     1.20     3.60     0.90
+```
+
+Neste caso, o programa usa directamente os momentos positivos e negativos por direcção e não reaplica `MXY`.
+
+## Resultados exportados
+
+A exportação `.xlsx` inclui folhas organizadas por tema:
+
+* metadados;
+* dados de entrada;
+* resumo por painel;
+* armaduras adoptadas;
+* zonas de armadura;
+* optimização;
+* diagnóstico;
+* validação da tabela;
+* verificação de unidades;
+* flexão;
+* corte;
+* fendilhação;
+* resultados completos.
+
+O relatório `.pdf` apresenta um resumo técnico com os resultados principais, incluindo a verificação de fendilhação por ELS quase-permanente quando aplicável.
+
+## Limitações
+
+A versão actual não substitui a validação técnica do engenheiro responsável. Não estão incluídas, de forma completa:
+
+* verificação global de compressão;
+* flexão composta `N-M`;
+* estabilidade de parede;
+* efeitos de segunda ordem;
+* efeitos sísmicos específicos;
+* retracção impedida;
+* temperatura;
+* juntas de betonagem;
+* estanquidade de reservatórios;
+* verificações específicas de paredes de contenção com interacção solo-estrutura.
 
 ## Requisitos
 
-- Python 3.10 ou superior
-- pandas
-- openpyxl
-- reportlab
+* Python 3.10 ou superior
+* pandas
+* openpyxl
+* reportlab
 
 Instalação das dependências:
 
@@ -49,50 +123,18 @@ Executar:
 python WallsEC2.py
 ```
 
-workflow:
+Fluxo recomendado:
 
-1. Definir geometria, materiais, unidades e opções de cálculo.
-2. Colar ou importar a tabela de esforços.
-3. Confirmar orientação dos eixos locais e combinação quase-permanente, quando aplicável.
-4. Calcular.
-5. Rever diagnóstico, resumo por painel e armaduras adoptadas.
-6. Exportar os resultados em `.xlsx` e/ou `.pdf`.
-
-## Formato recomendado da tabela
-
-```text
-Panel   Node   Case        MXX     MYY     MXY     QXX     QYY
-43      49     101        -12.40   3.80    1.25    18.50   6.20
-43      49     302 (QP)    -5.10   1.40    0.52     7.20   2.10
-```
-
-Unidades:
-
-- Momentos: `kNm/m`
-- Esforços transversos: `kN/m`
-
-## Resultados exportados
-
-O ficheiro XLSX inclui folhas separadas para:
-
-- metadados;
-- dados de entrada;
-- resumo por painel;
-- armaduras adoptadas;
-- zonas de armadura;
-- optimização;
-- diagnóstico;
-- validação da tabela;
-- verificações por linha;
-- notas EC2;
-- resultados completos para auditoria.
-
-O relatório PDF apresenta uma síntese técnica adequada para anexar a uma memória descritiva e justificativa
+1. Confirmar espessura, recobrimento, betão e aço.
+2. Confirmar orientação dos eixos locais.
+3. Importar ou colar a tabela de esforços.
+4. Confirmar unidades.
+5. Activar a verificação de `wk` e indicar a combinação quase-permanente, quando a fendilhação for condicionante.
+6. Executar o cálculo.
+7. Rever diagnóstico, armaduras adoptadas, fendilhação e avisos.
+8. Exportar os resultados para Excel e PDF.
 
 ## Licença
 
-Distribuído sob a licença MIT. Ver o ficheiro `LICENSE`.
+Este projecto é disponibilizado de acordo com a licença incluída no ficheiro `LICENSE`.
 
-## Autor
-
-**Eng.º Lutonda Tomalela**
