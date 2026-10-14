@@ -138,3 +138,15 @@ Fluxo recomendado:
 
 Este projecto é disponibilizado de acordo com a licença incluída no ficheiro `LICENSE`.
 
+
+## Versão candidata de validação
+
+A versão `1.6.0-rc1` reforça a validação de dados, o equilíbrio à flexão, a fendilhação e a rastreabilidade das combinações. Adopta uma malha comum por painel/face para verificar os casos ELU/ELS. A opção de redução mantém todos os casos por segurança.
+
+Esforços de membrana, corte em falta e fendilhação não avaliada impedem aprovação integral. A ferramenta continua limitada à flexão transversal de faixas; flexão composta e estabilidade requerem verificação complementar.
+
+Consultar [âmbito e validação](docs/VALIDATION.md) e [histórico de alterações](CHANGELOG.md). Para executar a regressão:
+
+```bash
+python -m unittest discover -s tests -v
+```

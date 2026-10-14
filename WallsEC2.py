@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "WallsEC2 - Paredes de Betão Armado (EC2)"
 APP_NAME = "WallsEC2"
-APP_VERSION = "v1.5"
+APP_VERSION = "v1.6.0-rc1"
 APP_AUTHOR = "Eng.º Lutonda Tomalela"
 APP_REPORT_AUTHOR = "https://github.com/lutondatomalela/WallsEC2"
 APP_SUBJECT = "Dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2"
@@ -326,7 +326,11 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df[f"__missing_{c}"] = bool(missing)
         if missing:
             df[c] = 0.0
-        df[c] = df[c].map(lambda v: safe_float(v, 0.0))
+        values = df[c].map(safe_float)
+        if not missing and not values.map(math.isfinite).all():
+            bad = list(df.index[~values.map(math.isfinite)][:10])
+            raise ValueError(f"Valores ausentes/não finitos na coluna {c}, linhas {bad}")
+        df[c] = values
 
     return df
 
@@ -334,22 +338,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def reduce_to_governing_cases(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
-    work = df.copy()
-    work["_mmax"] = work[["mxx", "myy", "mxy"]].abs().max(axis=1)
-    work["_qmax"] = work[["qxx", "qyy"]].abs().max(axis=1)
-    work["_score"] = work["_mmax"] + 0.15 * work["_qmax"]
-    idx = set()
-    for _, grp in work.groupby(["panel"], dropna=False):
-        if grp.empty:
-            continue
-        idx.add(grp["_score"].idxmax())
-        idx.add(grp["mxx"].abs().idxmax())
-        idx.add(grp["myy"].abs().idxmax())
-        idx.add(grp["mxy"].abs().idxmax())
-        idx.add(grp["qxx"].abs().idxmax())
-        idx.add(grp["qyy"].abs().idxmax())
-    out = work.loc[sorted(idx)].copy().sort_values(["panel", "case", "node", "__row_order"])
-    return out.drop(columns=["_mmax", "_qmax", "_score"], errors="ignore").reset_index(drop=True)
+    # Não descartar combinações por máximos de componentes: o caso governante
+    # depende de MXY, face, armadura adoptada e ELS. Preservar rastreabilidade.
+    return df.copy().reset_index(drop=True)
 
 
 # ============================================================
@@ -385,7 +376,7 @@ def moment_unit_factor_to_kNm_per_m(unit: str) -> float:
         return 0.001
     if "knm/m" in u or "kn.m/m" in u or "kn·m/m" in u:
         return 1.0
-    return 1.0
+    raise ValueError(f"Unidade de momento desconhecida: {unit}")
 
 
 def shear_unit_factor_to_kN_per_m(unit: str) -> float:
@@ -396,7 +387,7 @@ def shear_unit_factor_to_kN_per_m(unit: str) -> float:
         return 0.001
     if "kn/m" in u:
         return 1.0
-    return 1.0
+    raise ValueError(f"Unidade de esforço desconhecida: {unit}")
 
 
 def status_rank(status: str) -> int:
@@ -435,9 +426,23 @@ class WallDesigner:
         base_horizontal_phi: float = 8.0,
         base_horizontal_spacing: float = 200.0,
     ):
+        for name, value in {"espessura": thickness_mm, "fyk": fyk,
+                            "gamma_c": gamma_c, "gamma_s": gamma_s,
+                            "alpha_cc": alpha_cc, "wmax": wmax_mm}.items():
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} deve ser positivo e finito")
+        if not math.isfinite(cover_mm) or cover_mm < 0 or 2 * (cover_mm + phi_max_mm) >= thickness_mm:
+            raise ValueError("Espessura insuficiente para duas faces e duas direcções de armadura")
+        if not math.isfinite(aggregate_mm) or aggregate_mm < 0:
+            raise ValueError("Dimensão do agregado inválida")
+        self.gamma_c = gamma_c
         self.t = thickness_mm
         self.cover = cover_mm
+        if not re.fullmatch(r"C\d+(?:[.,]\d+)?/\d+(?:[.,]\d+)?", str(concrete_class).strip(), re.IGNORECASE):
+            raise ValueError("Classe de betão inválida; indicar Cxx/yy")
         self.fck = parse_strength_from_class(concrete_class, 30.0)
+        if not 12.0 <= self.fck <= 90.0:
+            raise ValueError("Classe de betão fora do âmbito C12/15 a C90/105")
         self.cp = concrete_props(self.fck, alpha_cc=alpha_cc, gamma_c=gamma_c)
         self.fyd = steel_fyd(fyk, gamma_s)
         self.fyk = fyk
@@ -456,7 +461,9 @@ class WallDesigner:
         self.combo_type = combo_type
         self.wmax_mm = wmax_mm
         base_phi = [8.0, 10.0, 12.0, 16.0, 20.0, 25.0]
-        self.phi_candidates = [p for p in base_phi if phi_min_mm <= p <= phi_max_mm] or [8.0, 10.0, 12.0, 16.0]
+        self.phi_candidates = [p for p in base_phi if phi_min_mm <= p <= phi_max_mm]
+        if not self.phi_candidates:
+            raise ValueError("Intervalo de diâmetros sem varões disponíveis")
         self.spacing_candidates = [75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 300.0, 350.0, 400.0]
         self.optimize_rebar = bool(optimize_rebar)
         self.rebar_strategy = str(rebar_strategy)
@@ -494,26 +501,33 @@ class WallDesigner:
 
     def effective_depth(self, phi: float = 12.0) -> float:
         # Armadura numa face, flexão transversal da parede/laje.
-        return max(self.t - self.cover - phi / 2.0, 1.0)
+        # Reserva conservativa da camada ortogonal exterior de cada face.
+        return self.t - self.cover - max(self.phi_candidates) - phi / 2.0
 
     def flexural_as_required(self, m_ed_kNm_per_m: float, phi_assumed: float = 12.0) -> float:
         """As requerido por metro de largura, mm2/m, para flexão simples de faixa de 1 m."""
         m = abs(m_ed_kNm_per_m) * 1e6  # Nmm/m
         if m <= 1e-9:
             return 0.0
-        d = self.effective_depth(phi_assumed)
-        z = 0.90 * d
-        return m / (0.87 * self.fyd * z)
+        d = self.effective_depth(max(self.phi_candidates))
+        # Bloco rectangular EC2 3.1.7, conservador para flexão simples.
+        eta = 1.0 if self.fck <= 50 else 1.0 - (self.fck - 50.0) / 200.0
+        capacity = eta * 1000.0 * self.cp["fcd"]
+        discriminant = d * d - 2.0 * m / capacity
+        if discriminant <= 0:
+            raise ValueError("Momento excede domínio de flexão simples; rever secção")
+        z = 0.5 * (d + math.sqrt(discriminant))
+        return m / (self.fyd * z)
 
     def mrd_kNm_per_m(self, as_mm2_per_m: float, phi: float) -> float:
         d = self.effective_depth(phi)
-        fcd = self.cp["fcd"]
-        # bloco retangular simplificado EC2: C = 0.8 x b fcd, b=1000 mm
-        x = as_mm2_per_m * self.fyd / (0.8 * 1000.0 * fcd) if fcd > 0 else 1e9
-        z = d - 0.4 * x
+        eta = 1.0 if self.fck <= 50 else 1.0 - (self.fck - 50.0) / 200.0
+        lam = 0.8 if self.fck <= 50 else 0.8 - (self.fck - 50.0) / 400.0
+        x = as_mm2_per_m * self.fyd / (lam * eta * 1000.0 * self.cp["fcd"])
+        # Limite declarado deste motor de flexão simples (sem armadura comprimida).
         if x > 0.45 * d:
-            z = max(0.75 * d, z)  # mantém valor conservativo razoável e assinala via utilização se necessário
-        return as_mm2_per_m * self.fyd * z / 1e6
+            return 0.0
+        return as_mm2_per_m * self.fyd * (d - 0.5 * lam * x) / 1e6
 
     def choose_rebar(self, as_req_per_face: float, max_spacing: float = 400.0) -> RebarSolution:
         best = None
@@ -542,9 +556,7 @@ class WallDesigner:
                         best = cand
                         best_key = key
         if best is None:
-            # solução forçada: Ø25//100
-            phi, s = 25.0, 100.0
-            best = RebarSolution(phi, s, bar_area_mm2(phi) * 1000.0 / s)
+            raise ValueError("Sem armadura exequível dentro dos diâmetros/espaçamentos definidos")
         return best
 
     def rebar_from_phi_spacing(self, phi: float, spacing: float) -> RebarSolution:
@@ -560,7 +572,7 @@ class WallDesigner:
         return self.rebar_from_phi_spacing(self.base_horizontal_phi, self.base_horizontal_spacing)
 
     def base_solution_is_valid(self, sol: RebarSolution, max_spacing: float) -> Tuple[bool, str]:
-        if sol.phi <= 0 or sol.spacing <= 0:
+        if sol.phi not in self.phi_candidates or sol.spacing <= 0:
             return False, "armadura base não definida"
         if sol.spacing > max_spacing + 1e-9:
             return False, f"espaçamento base {sol.spacing:.0f} mm > smax {max_spacing:.0f} mm"
@@ -618,12 +630,7 @@ class WallDesigner:
             candidates.sort(key=lambda x: x[0])
             return candidates[0][1]
 
-        # Fallback: mantém a coerência de espaçamento, mas informa que a solução foi forçada.
-        phi = max(self.phi_candidates) if self.phi_candidates else max(base.phi, 16.0)
-        as_add = bar_area_mm2(phi) * 1000.0 / s
-        n_layers = max(1, math.ceil(deficit_as / max(as_add, 1.0)))
-        text = f"{n_layers}Ø{int(phi)}//{int(s)}" if n_layers > 1 else f"Ø{int(phi)}//{int(s)}"
-        return RebarSolution(phi=phi, spacing=s, as_prov=n_layers * as_add, text_override=text)
+        raise ValueError("Sem reforço intercalado exequível; rever armadura base/espessura")
 
     def optimize_rebar_solution(self, as_req: float, max_spacing: float, is_vertical_direction: bool, label: str) -> RebarSolution:
         """Adopta armadura automática. Se activado, usa base + reforço adicional local coerente."""
@@ -666,7 +673,7 @@ class WallDesigner:
         text = f"{base.text} + {add.text}"
 
         return RebarSolution(
-            min(base.phi, add.phi), base.spacing, final_as,
+            max(base.phi, add.phi), base.spacing, final_as,
             text_override=text, base_text=base.text, add_text=add.text,
             as_base=base.as_prov, as_add=add.as_prov,
             optimization_note=f"base insuficiente; reforço local coerente com a malha base para {label}", n_iterations=1,
@@ -674,7 +681,7 @@ class WallDesigner:
 
     def shear_vrdc_kN_per_m(self, as_l_per_m: float, d_mm: float) -> float:
         fck = self.fck
-        gamma_c = 1.5
+        gamma_c = self.gamma_c
         crdc = 0.18 / gamma_c
         k = min(2.0, 1.0 + math.sqrt(200.0 / d_mm)) if d_mm > 0 else 2.0
         rho_l = min(0.02, max(0.0, as_l_per_m / (1000.0 * d_mm))) if d_mm > 0 else 0.0
@@ -729,7 +736,7 @@ class WallDesigner:
         # EC2 7.3.2 em forma simplificada para faixa de 1 m: kc*k*fct,eff*Act/sigma_s.
         # Act é aproximado como a meia espessura traccionada por face.
         kc = 0.40
-        k = 1.00 if self.t <= 300.0 else 0.65
+        k = 1.0 if self.t <= 300.0 else (0.65 if self.t >= 800.0 else 1.0 - 0.35 * (self.t - 300.0) / 500.0)
         fct_eff = self.cp["fctm"]
         act = 1000.0 * self.t / 2.0
         return kc * k * fct_eff * act / max(sigma_s_lim, 1.0)
@@ -766,7 +773,7 @@ class WallDesigner:
             families.extend(self._parse_rebar_text(sol.text))
         if not families:
             return sol.phi, sol.spacing, 1
-        phi_ctrl = max(phi for n, phi, s in families)
+        phi_ctrl = sum(n * phi**2 / sp for n, phi, sp in families) / sum(n * phi / sp for n, phi, sp in families)
         # se as famílias têm o mesmo espaçamento, usa intercalamento; caso contrário, usa o menor espaçamento.
         spacings = [s for n, phi, s in families if s > 0]
         n_fam = sum(n for n, phi, s in families)
@@ -835,8 +842,12 @@ class WallDesigner:
         phi_ctrl, s_eff, _ = self.rebar_crack_geometry(sol)
         d = self.effective_depth(phi_ctrl)
         z = 0.90 * d
-        sigma_s = min(0.95 * self.fyk, m / (z * sol.as_prov))
-        h_ceff = min(2.5 * (self.t - d), self.t / 2.0)
+        # Secção fendilhada transformada, sem limitar artificialmente sigma_s.
+        na = alpha_e * sol.as_prov / 1000.0
+        x = math.sqrt(na * na + 2.0 * na * d) - na
+        z = d - x / 3.0
+        sigma_s = m / (z * sol.as_prov)
+        h_ceff = min(2.5 * (self.t - d), (self.t - x) / 3.0, self.t / 2.0)
         a_ceff = max(1.0, 1000.0 * h_ceff)
         rho_eff = max(sol.as_prov / a_ceff, 1e-5)
         k1 = 0.8
@@ -847,7 +858,7 @@ class WallDesigner:
         c = self.cover
         sr_formula = k3 * c + k1 * k2 * k4 * phi_ctrl / rho_eff
         # Não se força sr_max ao espaçamento, mas reporta-se s_eff e compara-se com o limite EC2.
-        sr_max = sr_formula
+        sr_max = sr_formula if s_eff <= 5.0 * (c + phi_ctrl / 2.0) else 1.3 * (self.t - x)
         eps = max((sigma_s - kt * self.cp["fctm"] / rho_eff * (1.0 + alpha_e * rho_eff)) / Es, 0.6 * sigma_s / Es)
         wk = sr_max * eps
         note = "wk estimado com As final real da face traccionada; confirmar se os esforços são de ELS quase-permanente"
@@ -857,7 +868,10 @@ class WallDesigner:
         wk, sigma_s, sr_max, note = self.crack_width_estimate(m_ed_kNm_per_m, sol)
         phi_ctrl, s_eff, n_fam = self.rebar_crack_geometry(sol)
         phi_lim, s_lim, lim_note = self.ec2_crack_limits(sigma_s)
-        if wk <= self.wmax_mm + 1e-9 and phi_ctrl <= phi_lim + 1e-9 and s_eff <= s_lim + 1e-9:
+        if sigma_s > 0.8 * self.fyk:
+            st = "Verificar"
+            reason = f"Tensão ELS no aço {sigma_s:.1f} MPa > 0,8 fyk; rever secção"
+        elif wk <= self.wmax_mm + 1e-9 and phi_ctrl <= phi_lim + 1e-9 and s_eff <= s_lim + 1e-9:
             st = "OK"
             reason = f"wk={wk:.3f} mm ≤ wmax; Øctrl={phi_ctrl:.0f}≤Ølim={phi_lim:.0f}; s_eff={s_eff:.0f}≤s_lim={s_lim:.0f}"
         elif wk <= self.wmax_mm + 1e-9:
@@ -915,12 +929,17 @@ class WallDesigner:
                             continue
                         add_txt = f"{n_layers}Ø{int(phi)}//{int(base.spacing)}" if n_layers > 1 else f"Ø{int(phi)}//{int(base.spacing)}"
                         txt = f"{base.text} + {add_txt}"
-                        candidates.append(RebarSolution(min(base.phi, phi), base.spacing, final_as, text_override=txt, base_text=base.text, add_text=add_txt, as_base=base.as_prov, as_add=add_as, optimization_note=f"reforço intercalado por wk para {label}", n_iterations=2 + n_layers))
+                        candidates.append(RebarSolution(max(base.phi, phi), base.spacing, final_as, text_override=txt, base_text=base.text, add_text=add_txt, as_base=base.as_prov, as_add=add_as, optimization_note=f"reforço intercalado por wk para {label}", n_iterations=2 + n_layers))
 
         valid = []
         fallback = []
         for cand in candidates:
+            phi, spacing, _ = self.rebar_crack_geometry(cand)
+            if spacing - phi < max(phi, self.aggregate_mm + 5.0, 20.0):
+                continue
             det = self.crack_check_detail(m_qp, cand, "", "")
+            if det["sigma_s_MPa"] > 0.8 * self.fyk:
+                continue
             if cand.as_prov + 1e-9 < as_req:
                 continue
             key = (cand.as_prov, det["s_eff_mm"], det["phi_control_mm"], cand.text)
@@ -955,7 +974,10 @@ class WallDesigner:
             return "OK", f"combinação quase-permanente {self.qp_case}: wk,max={wk_max:.3f} mm ≤ wmax={self.wmax_mm:.3f} mm"
         return "Verificar", f"combinação quase-permanente {self.qp_case}: wk,max={wk_max:.3f} mm > wmax={self.wmax_mm:.3f} mm"
 
-    def design_one(self, row: pd.Series) -> Dict[str, object]:
+    def design_one(self, row: pd.Series, adopted=None) -> Dict[str, object]:
+        for c in ("mxx", "myy", "mxy", "qxx", "qyy", "nxx", "nyy", "nxy", "mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa"):
+            if c in row.index and not math.isfinite(safe_float(row[c])):
+                raise ValueError(f"Esforço inválido na coluna {c}")
         mxx_raw = safe_float(row.get("mxx", 0.0), 0.0)
         myy_raw = safe_float(row.get("myy", 0.0), 0.0)
         mxy_raw = safe_float(row.get("mxy", 0.0), 0.0)
@@ -966,12 +988,17 @@ class WallDesigner:
         mxy = mxy_raw * self.moment_factor
         qxx = qxx_raw * self.shear_factor
         qyy = qyy_raw * self.shear_factor
-        nxx = safe_float(row.get("nxx", 0.0), 0.0)
-        nyy = safe_float(row.get("nyy", 0.0), 0.0)
-        nxy = safe_float(row.get("nxy", 0.0), 0.0)
+        nxx = safe_float(row.get("nxx", 0.0), 0.0) * self.shear_factor
+        nyy = safe_float(row.get("nyy", 0.0), 0.0) * self.shear_factor
+        nxy = safe_float(row.get("nxy", 0.0), 0.0) * self.shear_factor
 
         wa_cols = ["mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa"]
-        has_explicit_wa = any((c in row.index) and (not bool(row.get(f"__missing_{c}", False))) for c in wa_cols)
+        wa_present = [(c in row.index) and not bool(row.get(f"__missing_{c}", False)) for c in wa_cols]
+        if any(wa_present) and not all(wa_present):
+            raise ValueError("Formato Wood-Armer incompleto: fornecer as quatro colunas M+/M-")
+        has_explicit_wa = all(wa_present)
+        if not has_explicit_wa and any(c not in row.index or bool(row.get(f"__missing_{c}", False)) for c in ("mxx", "myy")):
+            raise ValueError("Fornecer MXX e MYY ou as quatro colunas Wood-Armer")
         if has_explicit_wa:
             mx_pos = abs(safe_float(row.get("mxx_pos_wa", 0.0), 0.0) * self.moment_factor)
             mx_neg = abs(safe_float(row.get("mxx_neg_wa", 0.0), 0.0) * self.moment_factor)
@@ -1037,38 +1064,8 @@ class WallDesigner:
         sol_y_pos = self.optimize_rebar_solution(asy_pos_req, sy_max, y_is_vertical, "Y+")
         sol_y_neg = self.optimize_rebar_solution(asy_neg_req, sy_max, y_is_vertical, "Y-")
 
-        # Iteração adicional para esforço transverso: aumenta a armadura na direcção correspondente
-        # até VEd <= VRd,c, sempre que tal for possível sem exceder VRd,max.
-        d_shear_tmp = self.effective_depth(12.0)
-        vrdmax_tmp = self.shear_vrdmax_kN_per_m(d_shear_tmp)
-        def shear_target_as(q_abs):
-            if q_abs <= 1e-9:
-                return 0.0
-            best = 0.0
-            for a in [i * 50.0 for i in range(1, 801)]:  # até 40000 mm2/m, filtrado depois por As,max
-                if self.shear_vrdc_kN_per_m(a, d_shear_tmp) + 1e-9 >= q_abs:
-                    return a
-                best = a
-            return best
-        if abs(qxx) > self.shear_vrdc_kN_per_m(max(sol_x_pos.as_prov, sol_x_neg.as_prov), d_shear_tmp) and abs(qxx) <= vrdmax_tmp + 1e-9:
-            target = shear_target_as(abs(qxx))
-            if target > max(sol_x_pos.as_prov, sol_x_neg.as_prov):
-                if sol_x_pos.as_prov <= sol_x_neg.as_prov:
-                    sol_x_pos = self.optimize_rebar_solution(max(asx_pos_req, target), sx_max, x_is_vertical, "X+ corte")
-                else:
-                    sol_x_neg = self.optimize_rebar_solution(max(asx_neg_req, target), sx_max, x_is_vertical, "X- corte")
-                sol_x_pos.optimization_note += "; iteração ao corte" if sol_x_pos.as_prov >= target else ""
-                sol_x_neg.optimization_note += "; iteração ao corte" if sol_x_neg.as_prov >= target else ""
-        if abs(qyy) > self.shear_vrdc_kN_per_m(max(sol_y_pos.as_prov, sol_y_neg.as_prov), d_shear_tmp) and abs(qyy) <= vrdmax_tmp + 1e-9:
-            target = shear_target_as(abs(qyy))
-            if target > max(sol_y_pos.as_prov, sol_y_neg.as_prov):
-                if sol_y_pos.as_prov <= sol_y_neg.as_prov:
-                    sol_y_pos = self.optimize_rebar_solution(max(asy_pos_req, target), sy_max, y_is_vertical, "Y+ corte")
-                else:
-                    sol_y_neg = self.optimize_rebar_solution(max(asy_neg_req, target), sy_max, y_is_vertical, "Y- corte")
-                sol_y_pos.optimization_note += "; iteração ao corte" if sol_y_pos.as_prov >= target else ""
-                sol_y_neg.optimization_note += "; iteração ao corte" if sol_y_neg.as_prov >= target else ""
-
+        # O corte não é corrigido aumentando automaticamente aço longitudinal:
+        # rho_l é limitada e a face traccionada deve ser identificada.
         # Iteração específica para fendilhação com a combinação quase-permanente.
         # A optimização usa a armadura final real da face traccionada e, no modo base + reforços,
         # privilegia reforços intercalados com o mesmo espaçamento da armadura base.
@@ -1078,21 +1075,24 @@ class WallDesigner:
             sol_y_pos = self.optimize_solution_for_cracking(my_pos, sol_y_pos, asy_pos_req, sy_max, y_is_vertical, "Y+")
             sol_y_neg = self.optimize_solution_for_cracking(my_neg, sol_y_neg, asy_neg_req, sy_max, y_is_vertical, "Y-")
 
+        if adopted is not None:
+            sol_x_pos, sol_x_neg, sol_y_pos, sol_y_neg = adopted
+
         mrd_x_pos = self.mrd_kNm_per_m(sol_x_pos.as_prov, sol_x_pos.phi)
         mrd_x_neg = self.mrd_kNm_per_m(sol_x_neg.as_prov, sol_x_neg.phi)
         mrd_y_pos = self.mrd_kNm_per_m(sol_y_pos.as_prov, sol_y_pos.phi)
         mrd_y_neg = self.mrd_kNm_per_m(sol_y_neg.as_prov, sol_y_neg.phi)
 
         util_m = max(
-            mx_pos / mrd_x_pos if mrd_x_pos > 0 else 0.0,
-            mx_neg / mrd_x_neg if mrd_x_neg > 0 else 0.0,
-            my_pos / mrd_y_pos if mrd_y_pos > 0 else 0.0,
-            my_neg / mrd_y_neg if mrd_y_neg > 0 else 0.0,
+            mx_pos / mrd_x_pos if mrd_x_pos > 0 else float("inf"),
+            mx_neg / mrd_x_neg if mrd_x_neg > 0 else float("inf"),
+            my_pos / mrd_y_pos if mrd_y_pos > 0 else float("inf"),
+            my_neg / mrd_y_neg if mrd_y_neg > 0 else float("inf"),
         )
 
-        d_shear = self.effective_depth(12.0)
-        asx_for_shear = max(sol_x_pos.as_prov, sol_x_neg.as_prov)
-        asy_for_shear = max(sol_y_pos.as_prov, sol_y_neg.as_prov)
+        d_shear = min(self.effective_depth(sol.phi) for sol in (sol_x_pos, sol_x_neg, sol_y_pos, sol_y_neg))
+        asx_for_shear = min(sol_x_pos.as_prov, sol_x_neg.as_prov)
+        asy_for_shear = min(sol_y_pos.as_prov, sol_y_neg.as_prov)
         vrdc_x = self.shear_vrdc_kN_per_m(asx_for_shear, d_shear)
         vrdc_y = self.shear_vrdc_kN_per_m(asy_for_shear, d_shear)
         vrdmax_x = self.shear_vrdmax_kN_per_m(d_shear)
@@ -1270,7 +1270,7 @@ class WallDesigner:
             reason_items.append("VEd > VRd,c na direcção " + ", ".join(dirs))
             action_items.append("verificar esforço transverso com maior detalhe, rever espessura ou prever solução específica")
         if crack_status == "Verificar":
-            reason_items.append(crack_full_note if self.wk_check_enabled else "controlo simplificado de fendilhação não satisfeito")
+            reason_items.append(crack_note if self.wk_check_enabled else "controlo simplificado de fendilhação não satisfeito")
             action_items.append("usar combinação quase-permanente de ELS, reduzir diâmetro/espaçamento ou aumentar a armadura")
         elif crack_status == "OK*":
             if not self.wk_check_enabled:
@@ -1302,6 +1302,16 @@ class WallDesigner:
             else:
                 reason_items.append("estado atribuído por combinação de avisos")
                 action_items.append("rever notas de cálculo")
+
+        if missing_qxx or missing_qyy or (not has_explicit_wa and bool(row.get("__missing_mxy", False))) or crack_status == "Não avaliado" or max(abs(nxx), abs(nyy), abs(nxy)) > 1e-9 or any(abs(safe_float(row.get(c, 0.0), 0.0)) > 1e-9 for c in ("nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa")):
+            if status in ("OK", "OK*"):
+                status = "Verificar"
+            reason_items.append("Verificações incompletas: corte/ELS ou esforços de membrana N-M fora do âmbito")
+            action_items.append("Completar verificações em falta antes de adoptar em projecto")
+        horizontal_total = (sol_x_pos.as_prov + sol_x_neg.as_prov) if self.local_y_is_vertical else (sol_y_pos.as_prov + sol_y_neg.as_prov)
+        if horizontal_total < max(0.25 * as_vertical_total, 0.001 * self.ac_per_m):
+            status = "Não conforme"
+            reason_items.append("Armadura horizontal inferior ao mínimo relativo à armadura vertical adoptada (9.6.3)")
 
         verification_reason = " | ".join(dict.fromkeys(str(x) for x in reason_items if str(x).strip()))
         recommended_action = " | ".join(dict.fromkeys(str(x) for x in action_items if str(x).strip()))
@@ -1438,8 +1448,34 @@ class WallDesigner:
             "Notes": "; ".join(notes),
         }
 
-    def design_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame([self.design_one(r) for _, r in df.iterrows()])
+    def design_dataframe(self, df: pd.DataFrame, progress=None) -> pd.DataFrame:
+        """Adopta uma malha comum por painel e face para todas as combinações.
+
+        A verificação ELS utiliza a armadura envelope ELU/ELS, preservando cada
+        combinação original no relatório. Não se misturam acções entre casos.
+        """
+        if df.empty:
+            return pd.DataFrame()
+        if self.wk_check_enabled and not any(df["case"].map(self.is_qp_case)):
+            raise ValueError("Combinação quase-permanente não encontrada nos dados")
+        initial = [self.design_one(r) for _, r in df.iterrows()]
+        provisional = pd.DataFrame(initial)
+        adopted_by_panel = {}
+        for panel, group in provisional.groupby("Panel", dropna=False):
+            adopted = []
+            for label, vertical in (("X+", not self.local_y_is_vertical),
+                                    ("X-", not self.local_y_is_vertical),
+                                    ("Y+", self.local_y_is_vertical),
+                                    ("Y-", self.local_y_is_vertical)):
+                target = group[f"As{label.lower()}_prov_mm2_m"].max()
+                adopted.append(self.optimize_rebar_solution(target, self.max_spacing_for_direction(vertical), vertical, label))
+            adopted_by_panel[str(panel)] = adopted
+        results = []
+        for i, (_, row) in enumerate(df.iterrows(), 1):
+            results.append(self.design_one(row, adopted_by_panel[str(row.get("panel", ""))]))
+            if progress:
+                progress(i, len(df))
+        return pd.DataFrame(results)
 
 
 # ============================================================
@@ -1674,7 +1710,7 @@ class WallsEC2App(tk.Tk):
         ttk.Entry(baseh, textvariable=self.var_base_h_phi, width=5).pack(side="left")
         ttk.Label(baseh, text=" // ").pack(side="left")
         ttk.Entry(baseh, textvariable=self.var_base_h_spacing, width=6).pack(side="left")
-        ttk.Checkbutton(rebar, text="Reduzir para casos governantes", variable=self.var_reduce).grid(
+        ttk.Checkbutton(rebar, text="Preservar todos os casos (redução desactivada por segurança)", variable=self.var_reduce).grid(
             row=5, column=0, columnspan=2, sticky="w", padx=6, pady=3
         )
         rebar.columnconfigure(1, weight=1)
@@ -2524,31 +2560,35 @@ class WallsEC2App(tk.Tk):
         if err:
             messagebox.showwarning("Aviso", err)
             return
-        designer = WallDesigner(
-            thickness_mm=safe_float(self.var_thickness.get(), 200.0),
-            cover_mm=safe_float(self.var_cover.get(), 35.0),
-            concrete_class=self.var_concrete.get(),
-            fyk=safe_float(self.var_steel.get(), 500.0),
-            local_y_is_vertical=self.var_y_vertical.get(),
-            crack_spacing_limit_mm=250.0 if self.var_crack_spacing.get() else None,
-            wood_armer_method=self.var_wa_method.get(),
-            swap_local_axes=self.var_swap_axes.get(),
-            crack_check_enabled=True,
-            wk_check_enabled=self.var_crack_check.get(),
-            qp_case=self.var_qp_case.get(),
-            moment_unit=self.var_moment_unit.get(),
-            shear_unit=self.var_shear_unit.get(),
-            combo_type=self.var_combo_type.get(),
-            wmax_mm=safe_float(self.var_wmax.get(), 0.30),
-            phi_min_mm=safe_float(self.var_phi_min.get(), 8.0),
-            phi_max_mm=safe_float(self.var_phi_max.get(), 16.0),
-            optimize_rebar=self.var_optimize_rebar.get(),
-            rebar_strategy=self.var_rebar_strategy.get(),
-            base_vertical_phi=safe_float(self.var_base_v_phi.get(), 10.0),
-            base_vertical_spacing=safe_float(self.var_base_v_spacing.get(), 200.0),
-            base_horizontal_phi=safe_float(self.var_base_h_phi.get(), 8.0),
-            base_horizontal_spacing=safe_float(self.var_base_h_spacing.get(), 200.0),
-        )
+        try:
+            designer = WallDesigner(
+                thickness_mm=safe_float(self.var_thickness.get(), 200.0),
+                cover_mm=safe_float(self.var_cover.get(), 35.0),
+                concrete_class=self.var_concrete.get(),
+                fyk=safe_float(self.var_steel.get(), 500.0),
+                local_y_is_vertical=self.var_y_vertical.get(),
+                crack_spacing_limit_mm=250.0 if self.var_crack_spacing.get() else None,
+                wood_armer_method=self.var_wa_method.get(),
+                swap_local_axes=self.var_swap_axes.get(),
+                crack_check_enabled=True,
+                wk_check_enabled=self.var_crack_check.get(),
+                qp_case=self.var_qp_case.get(),
+                moment_unit=self.var_moment_unit.get(),
+                shear_unit=self.var_shear_unit.get(),
+                combo_type=self.var_combo_type.get(),
+                wmax_mm=safe_float(self.var_wmax.get(), 0.30),
+                phi_min_mm=safe_float(self.var_phi_min.get(), 8.0),
+                phi_max_mm=safe_float(self.var_phi_max.get(), 16.0),
+                optimize_rebar=self.var_optimize_rebar.get(),
+                rebar_strategy=self.var_rebar_strategy.get(),
+                base_vertical_phi=safe_float(self.var_base_v_phi.get(), 10.0),
+                base_vertical_spacing=safe_float(self.var_base_v_spacing.get(), 200.0),
+                base_horizontal_phi=safe_float(self.var_base_h_phi.get(), 8.0),
+                base_horizontal_spacing=safe_float(self.var_base_h_spacing.get(), 200.0),
+            )
+        except ValueError as exc:
+            messagebox.showerror("Parâmetros inválidos", str(exc))
+            return
         if designer.wk_check_enabled and not designer.qp_case:
             messagebox.showwarning("Aviso", "Foi seleccionada a verificação wk, mas não foi indicado o número da combinação quase-permanente.")
             return
@@ -2566,15 +2606,12 @@ class WallsEC2App(tk.Tk):
             self.progress_var.set(0.0)
             self.status_var.set("A calcular...")
             self.update_idletasks()
-            rows = []
-            total = max(len(df_in), 1)
-            for i, (_, r) in enumerate(df_in.iterrows(), start=1):
-                rows.append(designer.design_one(r))
+            def update_progress(i, total):
                 if i == 1 or i == total or i % max(1, total // 100) == 0:
                     self.progress_var.set(100.0 * i / total)
-                    self.status_var.set(f"A calcular... {i}/{total} linhas")
+                    self.status_var.set(f"A verificar malha comum... {i}/{total} linhas")
                     self.update_idletasks()
-            self.df_results = pd.DataFrame(rows)
+            self.df_results = designer.design_dataframe(df_in, progress=update_progress)
             self.status_var.set("A preparar resumos...")
             self.update_idletasks()
             self.df_summary = self.build_panel_summary(self.df_results)
