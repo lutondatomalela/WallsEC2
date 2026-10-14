@@ -30,3 +30,7 @@ São necessários, antes de declarar equivalência de robustez a uma ferramenta 
 - ensaios de importação/exportação com ficheiros reais, revisão visual GUI/PDF/XLSX e validação do executável Windows.
 
 As partes 1-2 (incêndio), 2 (pontes), 3 (retenção de líquidos) e fib MC2010 não foram implementadas por esta alteração. Não se afirma conformidade com essas extensões.
+
+## Evolução 1.7.0-rc1
+
+A referência histórica acima descreve a 1.6.0-rc1. A 1.7.0-rc1 acrescenta N-M, tensões ELS e segunda ordem de faixa, com 42 testes aprovados; consultar SECTION_MODEL.md para as hipóteses e limitações actuais. Estabilidade global, NXY, wk composto e validação visual continuam pendentes.

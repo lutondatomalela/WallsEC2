@@ -1,152 +1,59 @@
 # WallsEC2
 
-**WallsEC2** é uma ferramenta em Python para dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2, a partir de esforços por metro obtidos em modelos de painéis/placas.
+Ferramenta Python para dimensionamento e verificação de faixas de paredes de betão armado, a partir de esforços por metro de modelos de placa/casca, segundo o Eurocódigo 2.
 
-Repositório: [https://github.com/lutondatomalela/WallsEC2](https://github.com/lutondatomalela/WallsEC2)
+## Versão de validação 1.7.0-rc1
+
+Esta versão inclui flexão simples, interacção N-M de faixa por compatibilidade de extensões, tensões ELS de secção fendilhada e segunda ordem pelo método da rigidez nominal para faixas isoladas. A convenção de esforço normal é seleccionada explicitamente. O comprimento efectivo é definido pelo projectista.
+
+As verificações são de secção/faixa. Não constituem análise de estabilidade global de uma parede ou de um sistema de paredes acopladas.
 
 ## Funcionalidades
 
-* Importação de tabelas de esforços em `.xlsx`, `.csv` ou por colagem directa na interface.
-* Leitura de esforços no formato `MXX`, `MYY`, `MXY`, `QXX` e `QYY`.
-* Leitura alternativa de momentos Wood-Armer já separados: `MXX+`, `MXX-`, `MYY+` e `MYY-`.
-* Dimensionamento de armadura por direcção e por face local do painel.
-* Estratégia de armadura base com reforços locais intercalados.
-* Verificação ao esforço transverso com `VRd,c` e limite simplificado `VRd,max`.
-* Controlo indirecto da fendilhação por diâmetro e espaçamento quando `wk` não é calculado.
-* Verificação explícita de `wk` apenas para a combinação quase-permanente de ELS indicada pelo utilizador.
-* Diagnóstico de dados importados, unidades, eixos locais, casos governantes e avisos de validação.
-* Visualização ampliada de células truncadas na GUI.
-* Exportação de resultados para `.xlsx`, `.csv` e relatório `.pdf`.
-
-## Âmbito de cálculo
-
-A ferramenta considera paredes modeladas como elementos de placa/casca e dimensiona faixas de 1 m. Os resultados dependem da orientação dos eixos locais, da normal local do painel, das unidades adoptadas e da qualidade da tabela de esforços importada.
-
-A direcção local vertical deve ser confirmada antes do cálculo. Quando o eixo local `Y` é vertical, os resultados `Y+` e `Y-` correspondem à armadura vertical nas faces positiva e negativa do painel. A face `+` é definida pela normal local positiva do elemento.
-
-## Fendilhação
-
-A verificação da fendilhação segue duas lógicas distintas:
-
-1. **Sem cálculo explícito de `wk`**  
-O programa aplica apenas controlo indirecto por armadura mínima, diâmetro e espaçamento. O resultado é assinalado como `OK\*`, e não como `OK` puro, porque `wk` não foi calculado.
-2. **Com cálculo explícito de `wk`**  
-O utilizador deve activar a opção de verificação de `wk` e indicar a combinação quase-permanente de ELS. O programa calcula `wk` apenas nas linhas dessa combinação. Linhas ELU ou outras combinações ficam como `Não avaliado` para fendilhação.
-
-Os campos de fendilhação são interpretados assim:
-
-|Campo|Interpretação|
-|-|-|
-|`wk\_x+`|fendilhação associada à armadura X na face +|
-|`wk\_x-`|fendilhação associada à armadura X na face -|
-|`wk\_y+`|fendilhação associada à armadura Y na face +|
-|`wk\_y-`|fendilhação associada à armadura Y na face -|
-|`wk\_max`|maior valor entre as quatro verificações|
-
-Para paredes de cave, reservatórios, elementos com exigência de estanquidade ou paredes exteriores críticas, recomenda-se a verificação explícita de `wk` com a combinação quase-permanente de ELS.
-
-## Formatos de entrada
-
-### Formato geral com `MXY`
-
-```text
-Panel   Node   Case       MXX      MYY      MXY      QXX      QYY
-43      49     101        -12.40    3.80     1.25    18.50     6.20
-43      49     302 (QP)    -5.10    1.40     0.52     7.20     2.10
-```
-
-Neste caso, o programa trata `MXY` pelo método seleccionado na interface.
-
-### Formato com momentos Wood-Armer separados
-
-```text
-Panel   Node   Case       MXX+     MXX-     MYY+     MYY-
-43      49     101        12.40     3.10     8.50     2.20
-43      49     302 (QP)    5.10     1.20     3.60     0.90
-```
-
-Neste caso, o programa usa directamente os momentos positivos e negativos por direcção e não reaplica `MXY`.
-
-## Resultados exportados
-
-A exportação `.xlsx` inclui folhas organizadas por tema:
-
-* metadados;
-* dados de entrada;
-* resumo por painel;
-* armaduras adoptadas;
-* zonas de armadura;
-* optimização;
-* diagnóstico;
-* validação da tabela;
-* verificação de unidades;
-* flexão;
-* corte;
-* fendilhação;
-* resultados completos.
-
-O relatório `.pdf` apresenta um resumo técnico com os resultados principais, incluindo a verificação de fendilhação por ELS quase-permanente quando aplicável.
-
-## Limitações
-
-A versão actual não substitui a validação técnica do engenheiro responsável. Não estão incluídas, de forma completa:
-
-* verificação global de compressão;
-* flexão composta `N-M`;
-* estabilidade de parede;
-* efeitos de segunda ordem;
-* efeitos sísmicos específicos;
-* retracção impedida;
-* temperatura;
-* juntas de betonagem;
-* estanquidade de reservatórios;
-* verificações específicas de paredes de contenção com interacção solo-estrutura.
-
-## Requisitos
-
-* Python 3.10 ou superior
-* pandas
-* openpyxl
-* reportlab
-
-Instalação das dependências:
-
-```bash
-pip install pandas openpyxl reportlab
-```
+- Importação XLSX/CSV ou colagem de tabelas; validação de valores, unidades e formato.
+- Momentos MXX/MYY/MXY ou quatro colunas Wood-Armer M+/M-.
+- Esforços de membrana NXX/NYY assinados para verificação N-M direccional.
+- Combinações ELU por listas/intervalos e uma combinação ELS quase-permanente.
+- Malha comum por painel/face, armadura base e reforços compatíveis.
+- Corte VRd,c e limite simplificado VRd,max.
+- wk de flexão simples apenas na combinação QP e com armadura adoptada em ELU.
+- Relatórios Excel, CSV e PDF; folha Excel específica de N-M/segunda ordem/tensões ELS.
 
 ## Utilização
 
-Executar:
-
 ```bash
+pip install -r requirements.txt
 python WallsEC2.py
 ```
 
-Fluxo recomendado:
+Python 3.10 ou superior, com Tkinter. Confirmar espessura, recobrimento, orientação X/Y, faces e unidades da tabela. Indicar as combinações ELU, por exemplo `101-133`, e a combinação QP quando se pretende calcular wk.
 
-1. Confirmar espessura, recobrimento, betão e aço.
-2. Confirmar orientação dos eixos locais.
-3. Importar ou colar a tabela de esforços.
-4. Confirmar unidades.
-5. Activar a verificação de `wk` e indicar a combinação quase-permanente, quando a fendilhação for condicionante.
-6. Executar o cálculo.
-7. Rever diagnóstico, armaduras adoptadas, fendilhação e avisos.
-8. Exportar os resultados para Excel e PDF.
+Para N-M, seleccionar «Compressão positiva» ou «Tracção positiva» de acordo com o software de origem. Momento positivo corresponde à tracção na face + do modelo adoptado: confirmar a correspondência com a normal local dos painéis. NXY e esforços de membrana Wood-Armer não são convertidos automaticamente numa verificação completa de membrana.
 
-## Licença
+Para segunda ordem, indicar l0 em mm, fluência efectiva e extensão última de cálculo do aço. O valor 0 de l0 significa que a segunda ordem não foi avaliada. A extensão última predefinida de 0,01 é uma hipótese conservadora que deve ser confirmada com a classe de ductilidade do aço.
 
-Este projecto é disponibilizado de acordo com a licença incluída no ficheiro `LICENSE`.
+Rever estados, razões e acções recomendadas antes de adoptar os resultados. A redução por máximos de componentes está desactivada: as combinações seleccionadas são preservadas.
 
+## Âmbito e limitações
 
-## Versão candidata de validação
+A interacção N-M usa uma faixa rectangular de 1 m, duas camadas de aço, betão parábola-rectângulo sem resistência à tracção e aço elástico-perfeitamente plástico. A curva é discretizada e a convergência é testada.
 
-A versão `1.6.0-rc1` reforça a validação de dados, o equilíbrio à flexão, a fendilhação e a rastreabilidade das combinações. Adopta uma malha comum por painel/face para verificar os casos ELU/ELS. A opção de redução mantém todos os casos por segurança.
+O método de rigidez nominal aplica-se ao modelo de faixa isolada de secção/esforço normal constantes, com l0 definido externamente. Considera excentricidade mínima e imperfeição simplificada. Não calcula vínculos, estabilidade global, interacção entre paredes ou flexão no plano da parede.
 
-Esforços de membrana, corte em falta e fendilhação não avaliada impedem aprovação integral. A ferramenta continua limitada à flexão transversal de faixas; flexão composta e estabilidade requerem verificação complementar.
+wk de flexão composta ainda não está integrado: para N não nulo em QP, não é apresentado um wk de flexão simples como resultado válido. São disponibilizadas tensões ELS N-M quando existem momentos originais assinados.
 
-Consultar [âmbito e validação](docs/VALIDATION.md) e [histórico de alterações](CHANGELOG.md). Para executar a regressão:
+Não estão incluídas verificações completas de membrana NXY, sismo, amarrações/emendas, retracção impedida, temperatura, estanquidade de reservatórios, incêndio ou pontes. A validação visual GUI/PDF e ensaios com ficheiros reais continuam pendentes. Esta versão é candidata de validação e não uma certificação para utilização autónoma em projecto.
+
+## Validação
 
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+42 testes locais aprovados, incluindo equilíbrio de secção, convergência, rigidez nominal, importação/unidades, combinação de casos e exportação XLSX. Integração contínua configurada para Windows/Linux e Python 3.10/3.12; o resultado remoto deve ser consultado na pull request.
+
+Consultar [validação e hipóteses](docs/VALIDATION.md), [motor N-M](docs/SECTION_MODEL.md) e [histórico](CHANGELOG.md).
+
+## Licença
+
+MIT, conforme [LICENSE](LICENSE). As normas usadas na revisão não são redistribuídas.

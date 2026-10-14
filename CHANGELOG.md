@@ -1,5 +1,16 @@
 # Histórico de alterações
 
+## 1.7.0-rc1 — 2026-10-14
+
+- Motor modular de interacção N-M por fibras e compatibilidade de extensões.
+- Convenção N explícita, extensão última do aço e posição conservadora das camadas.
+- Tensões ELS em secção fendilhada, com verificação do resíduo de equilíbrio.
+- Segunda ordem por rigidez nominal de faixa isolada com l0/fluência fornecidos.
+- Listas/intervalos ELU e QP separados; malha ELU seguida de verificação ELS.
+- wk de flexão simples omitido para QP com N não nulo.
+- Folha Excel N-M/estabilidade e teste de reabertura do relatório exportado.
+- 42 testes locais aprovados, incluindo convergência e casos analíticos.
+
 ## 1.6.0-rc1 — 2026-10-14
 
 - Rejeição de esforços inválidos/não finitos, formatos Wood-Armer incompletos, unidades desconhecidas e geometrias incompatíveis.
