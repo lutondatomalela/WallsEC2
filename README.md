@@ -2,7 +2,7 @@
 
 Ferramenta Python para dimensionamento e verificação de faixas de paredes de betão armado, a partir de esforços por metro de modelos de placa/casca, segundo o Eurocódigo 2.
 
-## Versão de validação 1.7.0-rc1
+## Versão de validação 1.8.0-rc1
 
 Esta versão inclui flexão simples, interacção N-M de faixa por compatibilidade de extensões, tensões ELS de secção fendilhada e segunda ordem pelo método da rigidez nominal para faixas isoladas. A convenção de esforço normal é seleccionada explicitamente. O comprimento efectivo é definido pelo projectista.
 
@@ -16,7 +16,7 @@ As verificações são de secção/faixa. Não constituem análise de estabilida
 - Combinações ELU por listas/intervalos e uma combinação ELS quase-permanente.
 - Malha comum por painel/face, armadura base e reforços compatíveis.
 - Corte VRd,c e limite simplificado VRd,max.
-- wk de flexão simples apenas na combinação QP e com armadura adoptada em ELU.
+- wk de flexão simples e N-M direccional na QP, com a armadura comum adoptada em ELU/ELS.
 - Relatórios Excel, CSV e PDF; folha Excel específica de N-M/segunda ordem/tensões ELS.
 
 ## Utilização
@@ -40,9 +40,9 @@ A interacção N-M usa uma faixa rectangular de 1 m, duas camadas de aço, betã
 
 O método de rigidez nominal aplica-se ao modelo de faixa isolada de secção/esforço normal constantes, com l0 definido externamente. Considera excentricidade mínima e imperfeição simplificada. Não calcula vínculos, estabilidade global, interacção entre paredes ou flexão no plano da parede.
 
-wk de flexão composta ainda não está integrado: para N não nulo em QP, não é apresentado um wk de flexão simples como resultado válido. São disponibilizadas tensões ELS N-M quando existem momentos originais assinados.
+wk N-M é calculado com tensões de secção fendilhada, k2 dependente do gradiente de tracção e área efectiva por face. Exige convenção N explícita, momentos originais assinados e ausência de NXY/MXY. Casos fora destas condições permanecem não avaliados. São verificados limites conservadores de armadura mínima e de tensões para a utilização do modelo linear.
 
-Não estão incluídas verificações completas de membrana NXY, sismo, amarrações/emendas, retracção impedida, temperatura, estanquidade de reservatórios, incêndio ou pontes. A validação visual GUI/PDF e ensaios com ficheiros reais continuam pendentes. Esta versão é candidata de validação e não uma certificação para utilização autónoma em projecto.
+Não estão incluídas verificações completas de membrana NXY, sismo, amarrações/emendas, retracção impedida, temperatura, estanquidade de reservatórios, incêndio ou pontes. O PDF foi renderizado e inspeccionado num caso sintético, incluindo resultados não avaliados. A validação visual da GUI e os ensaios com ficheiros reais continuam pendentes. Esta versão é candidata de validação e não uma certificação para utilização autónoma em projecto.
 
 ## Validação
 
@@ -50,7 +50,7 @@ Não estão incluídas verificações completas de membrana NXY, sismo, amarraç
 python -m unittest discover -s tests -v
 ```
 
-42 testes locais aprovados, incluindo equilíbrio de secção, convergência, rigidez nominal, importação/unidades, combinação de casos e exportação XLSX. Integração contínua configurada para Windows/Linux e Python 3.10/3.12; o resultado remoto deve ser consultado na pull request.
+58 testes locais aprovados, incluindo equilíbrio de secção, convergência, rigidez nominal, importação/unidades, combinação de casos e exportação XLSX. Integração contínua configurada para Windows/Linux e Python 3.10/3.12; a base anterior passou nas quatro configurações; os testes desta revisão devem ser consultados na pull request.
 
 Consultar [validação e hipóteses](docs/VALIDATION.md), [motor N-M](docs/SECTION_MODEL.md) e [histórico](CHANGELOG.md).
 

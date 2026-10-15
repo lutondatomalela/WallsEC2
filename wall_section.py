@@ -96,7 +96,10 @@ class Section:
             return dict(utilisation=float('inf'),mrd=0.0,status='Não conforme')
         capacity=bounds[1] if m_knm >=0 else -bounds[0]
         utilisation=abs(m_knm)/capacity if capacity>1e-9 else (0.0 if abs(m_knm)<1e-9 else float('inf'))
-        return dict(utilisation=utilisation,mrd=max(0.0,capacity),status='OK' if utilisation<=1+1e-6 else 'Não conforme')
+        in_domain = bounds[0]-1e-6 <= m_knm <= bounds[1]+1e-6
+        if not in_domain and utilisation <= 1:
+            utilisation = float('inf')
+        return dict(utilisation=utilisation,mrd=max(0.0,capacity),status='OK' if in_domain and utilisation<=1+1e-6 else 'Não conforme')
 
     def service(self,n_kn,m_knm,creep=0.0):
         """Secção elástica fendilhada: betão traccionado desprezado.
@@ -136,6 +139,49 @@ class Section:
         return dict(sigma_plus=float(steel[0]),sigma_minus=float(steel[1]),
                     concrete_max=float(concrete.max()),eps0=float(eps0),curvature=float(k),
                     residual_n=float(residual[0]),residual_m=float(residual[1]))
+
+    def cracking(self, n_kn, m_knm, phi_plus, spacing_plus, phi_minus, spacing_minus,
+                 creep=0.0, kt=0.4):
+        """EC2 7.3.4, faixa N-M, varões aderentes, carregamento imposto.
+
+        hc,eff por face, sem sobrepor áreas na tracção integral. A deformação
+        imposta/retracção e a membrana NXY não fazem parte desta resolução.
+        """
+        values=(n_kn,m_knm,phi_plus,spacing_plus,phi_minus,spacing_minus,kt)
+        if not all(math.isfinite(v) for v in values) or min(phi_plus,spacing_plus,phi_minus,spacing_minus)<=0 or not 0<kt<=.6:
+            raise ValueError('Parâmetros de fendilhação inválidos')
+        service=self.service(n_kn,m_knm,creep)
+        alpha=self.es/(22000*((self.fck+8)/10)**.3)
+        fctm=.3*self.fck**(2/3) if self.fck<=50 else 2.12*math.log(1+(self.fck+8)/10)
+        ext_plus=-service['eps0']+service['curvature']*self.h/2
+        ext_minus=-service['eps0']-service['curvature']*self.h/2
+        output={'service':service}
+        for name,ext,other,sigma,area,phi,spacing in (
+            ('plus',ext_plus,ext_minus,service['sigma_plus'],self.as_plus,phi_plus,spacing_plus),
+            ('minus',ext_minus,ext_plus,service['sigma_minus'],self.as_minus,phi_minus,spacing_minus)):
+            tension=max(0.,-sigma)
+            if ext<=1e-14 or tension<=1e-9:
+                output[name]=dict(wk=0.,sigma_s=tension,sr_max=0.,hc_eff=0.,rho_eff=0.,k2=0.,eps_difference=0.)
+                continue
+            full_tension=other>=0
+            depth=self.h if full_tension else self.h*ext/(ext-other)
+            hc=min(2.5*self.cover_axis,self.h/2)
+            if not full_tension:
+                hc=min(hc,depth/3)
+            rho=area/(1000*hc)
+            # epsilon1/epsilon2: extremos da secção fendilhada (7.13).
+            e1=max(ext,max(0.,other)); e2=min(ext,max(0.,other))
+            k2=(e1+e2)/(2*e1)
+            cover=self.cover_axis-phi/2
+            if cover<0:
+                raise ValueError('Diâmetro incompatível com o eixo da camada')
+            sr=3.4*cover+.8*k2*.425*phi/rho
+            if spacing>5*(cover+phi/2):
+                sr=1.3*depth
+            difference=max((tension-kt*fctm/rho*(1+alpha*rho))/self.es,.6*tension/self.es)
+            output[name]=dict(wk=sr*difference,sigma_s=tension,sr_max=sr,hc_eff=hc,
+                              rho_eff=rho,k2=k2,eps_difference=difference)
+        return output
 
 
 def nominal_stiffness(n_kn,m0_knm,h,as_total,axis_cover,fck,fcd,fyd,l0_mm,phi_eff=0.0,beta=math.pi**2/8):

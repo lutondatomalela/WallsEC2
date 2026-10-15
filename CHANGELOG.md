@@ -1,5 +1,16 @@
 # Histórico de alterações
 
+## 1.8.0-rc1 — 2026-10-15
+
+- wk em N-M direccional: secção fendilhada, k2 variável, área efectiva por face e mínimos conservadores.
+- Reforços ELS N-M integrados na malha comum ELU/ELS, sem forçar soluções inexequíveis.
+- Casos com NXY/MXY ou sinal N indefinido preservam fendilhação não avaliada.
+- Corrigido o teste de domínio N-M em tracção excêntrica com armadura assimétrica.
+- Esforços exclusivamente axiais deixam de ser classificados como linhas sem esforços.
+- Verificação de QP por painel; ausência de avaliação wk numa linha ELU não invalida por si só o painel verificado em QP.
+- PDF com resultados N-M/segunda ordem, parâmetros, painéis não avaliados visíveis e tabelas ajustadas à página.
+- 58 testes locais aprovados; PDF sintético renderizado e inspeccionado.
+
 ## 1.7.0-rc1 — 2026-10-14
 
 - Motor modular de interacção N-M por fibras e compatibilidade de extensões.

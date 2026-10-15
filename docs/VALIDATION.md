@@ -1,36 +1,30 @@
-# Validação e âmbito — 1.6.0-rc1
+# Validação e âmbito
 
-Referência principal consultada: NP EN 1992-1-1:2010, incluindo o Anexo Nacional, AC:2012 e A1:2019 fornecidos para revisão. Os PDFs normativos não são redistribuídos no repositório.
+Referência consultada: NP EN 1992-1-1:2010 e Anexo Nacional, AC:2012 e A1:2019 fornecidos para revisão. As normas não são redistribuídas.
 
-## Verificações numéricas
+## Execução
 
-Executar `python -m unittest discover -s tests -v`.
+`python -m unittest discover -s tests -v`
 
-Os testes incluem equilíbrio M = As fyd (d-lambda x/2), cálculo independente de VRd,c com gamma_c alterado, secção fendilhada transformada em ELS, expressões (7.9), (7.11), (7.12), (7.14), geometria, unidades, dados inválidos, transformação de momentos e malha comum ELU/ELS.
+58 testes locais aprovados. Compilação Python e verificação de diferenças de código sem erros. A base anterior passou em Windows/Linux, Python 3.10/3.12; a revisão actual é submetida à mesma matriz de integração contínua.
 
-Referências: 3.1.7 (bloco rectangular); 6.2.2/6.2.3 (corte); 7.2 (tensão de serviço); 7.3.2/7.3.4 (fendilhação); 8.2 (distância livre); 9.3/9.6 (pormenorização).
+## Evidência
 
-A verificação de fendilhação permanece restrita à flexão simples de uma faixa com armadura traccionada. A transformação de secção considera essa armadura e despreza a contribuição da armadura comprimida. Os limites tabulados de diâmetro/espaçamento continuam indicativos e não constituem uma verificação autónoma de 7.3.3.
+- Equilíbrio analítico de flexão simples, compressão e tracção uniformes.
+- Interacção N-M, inversão de sinais, armadura assimétrica e momento obrigatório no limite de tracção excêntrica.
+- Comparação 160/320 fibras e pontos de curva em casos representativos.
+- Equilíbrio da secção fendilhada e resíduo ELS; tensões sem truncagem.
+- wk N-M por cálculo independente em tracção simples, compressão sem fendas, flexão pura, tracção excêntrica e inversão da flexão.
+- Rigidez nominal por cálculo independente, influência da fluência/comprimento e carga de instabilidade.
+- Convenções N, listas/intervalos ELU, QP por painel e preservação da malha comum.
+- Importação/unidades, rejeição de dados inválidos, ausência de falsos wk com NXY/MXY.
+- Exportação XLSX reaberta com verificação de parâmetros/resultados; regressão PDF com quadro N-M e resultado não avaliado.
+- PDF de ensaio com dois painéis renderizado e inspeccionado; correcção de tabelas estreitas, larguras, títulos isolados e painéis omitidos.
 
-A altura útil reserva a maior bitola seleccionável como camada ortogonal exterior, de modo conservador. A capacidade é limitada ao domínio x/d <= 0,45; trata-se de uma restrição explícita do motor, não de um limite universal para qualquer classe de betão ou análise.
+## Limites
 
-## Critérios de utilização
+Verifica faixas de 1 m à flexão transversal e N-M direccional. Segunda ordem apenas de faixa isolada, com l0 definido externamente. Não calcula estabilidade global, flexão no plano de parede, membrana NXY, fendas inclinadas, sismo, estanquidade, incêndio ou pontes.
 
-Esta versão é uma candidata de validação para flexão transversal de paredes modeladas como placas. Não é uma validação integral de paredes estruturais. Esforços de membrana não nulos desencadeiam «Verificar»: não está implementada interacção N-M, estabilidade ou segunda ordem. Corte não fornecido e ELS não avaliado também impedem aprovação integral.
+wk composto exige momentos originais assinados e ausência de NXY/MXY. A fluência entra de forma linear no modelo ELS; tensões acima dos limites adoptados geram aviso. A armadura mínima N-M usa uma aproximação conservadora, documentada em SECTION_MODEL.md.
 
-A malha adoptada é uniforme por painel/face e envelope dos casos analisados; não se combinam esforços de casos diferentes. As linhas fora da combinação QP ficam sem avaliação de wk. A distribuição localizada de reforços requer desenvolvimento adicional.
-
-São necessários, antes de declarar equivalência de robustez a uma ferramenta de projecto completa:
-
-- motor de flexão composta, esforços de membrana e convenções NXX/NYY/NXY explicitamente configuráveis;
-- imperfeições, esbelteza, estabilidade e segunda ordem;
-- definição das combinações ELU/ELS em conjuntos separados, com envelope de dimensionamento apenas ELU e verificação ELS;
-- cálculo de estanquidade segundo NP EN 1992-3 para reservatórios, caso solicitado;
-- revisão independente das tabelas de fendilhação, pormenorização, amarrações e ligações;
-- ensaios de importação/exportação com ficheiros reais, revisão visual GUI/PDF/XLSX e validação do executável Windows.
-
-As partes 1-2 (incêndio), 2 (pontes), 3 (retenção de líquidos) e fib MC2010 não foram implementadas por esta alteração. Não se afirma conformidade com essas extensões.
-
-## Evolução 1.7.0-rc1
-
-A referência histórica acima descreve a 1.6.0-rc1. A 1.7.0-rc1 acrescenta N-M, tensões ELS e segunda ordem de faixa, com 42 testes aprovados; consultar SECTION_MODEL.md para as hipóteses e limitações actuais. Estabilidade global, NXY, wk composto e validação visual continuam pendentes.
+Persistem ensaios com ficheiros reais, revisão visual GUI, comparação independente com outro programa/casos de referência publicados e validação do executável Windows. A contagem de testes não constitui certificação de utilização autónoma em projecto.

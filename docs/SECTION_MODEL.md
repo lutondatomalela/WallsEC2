@@ -1,4 +1,4 @@
-# Modelo N-M e segunda ordem — 1.7.0-rc1
+# Modelo N-M e segunda ordem — 1.8.0-rc1
 
 ## Convenções e constituição
 
@@ -20,7 +20,11 @@ A escolha de aço tenta acrescentar armadura às duas faces para N-M; se as opç
 
 Equilíbrio N-M elástico com betão traccionado desprezado; Ecm efectivo = Ecm/(1+phi_eff). A secção é resolvida por conjuntos activos de fibras comprimidas e o resíduo de equilíbrio é verificado. Tensões no aço não são truncadas artificialmente. Para esforços Wood-Armer separados, são necessários os momentos originais assinados para esta resolução; as envolventes positivas/negativas não são subtraídas para inventar um momento ELS.
 
-wk N-M ainda não é calculado. O resultado wk é omitido para QP com esforços de membrana não nulos e o estado assinala verificação em falta.
+wk N-M direccional é calculado pelas expressões (7.9), (7.11), (7.13) e (7.14), com kt=0,4, varões aderentes e Ac,eff por face. Para tracção integral, as áreas efectivas não ultrapassam h/2 por face. Para secção parcialmente traccionada, hc,eff inclui o limite (h-x)/3. k2 varia entre 0,5 e 1 conforme as extensões extremas. A tensão no aço não é truncada.
+
+A armadura mínima N-M adopta o limite conservador kc=1 e Act=h/2 por face traccionada (7.3.2). A pesquisa de reforços ELS aumenta a malha comum de forma limitada pelas opções exequíveis; qualquer insuficiência residual permanece indicada.
+
+O cálculo exige N assinado, momentos originais e ausência de NXY/MXY. Não avalia membrana acoplada, fendas inclinadas ou retracção impedida. São assinaladas tensões acima de 0,8fyk no aço ou 0,45fck no betão; o segundo limite evita aprovação pelo modelo linear quando os efeitos não lineares de fluência podem ser relevantes.
 
 ## Rigidez nominal
 
@@ -30,4 +34,8 @@ NEd >= NB gera instabilidade no modelo de faixa. São considerados e_min=max(h/3
 
 ## Combinações e relatórios
 
-Listas/intervalos ELU e QP são mutuamente exclusivos. Casos não seleccionados não entram no dimensionamento. A malha comum parte dos ELU; QP verifica essa malha e pode exigir reforço por wk de flexão simples. As acções de casos diferentes não são somadas. A folha `18_NM_Stability` contém resistência N-M, parâmetros de estabilidade, majoração e tensões ELS.
+Listas/intervalos ELU e QP são mutuamente exclusivos. Casos não seleccionados não entram no dimensionamento. A malha comum parte dos ELU; QP verifica essa malha e pode exigir reforço por wk de flexão simples ou N-M direccional. As acções de casos diferentes não são somadas. A folha `18_NM_Stability` contém resistência N-M, parâmetros de estabilidade, majoração e tensões ELS.
+
+## Relatório PDF
+
+Inclui parâmetros N, l0, fluência, quadro N-M/segunda ordem e resumo QP com painéis não avaliados preservados. A largura das tabelas é limitada à área útil. Um caso sintético com dois painéis foi renderizado e inspeccionado. Esta QA não substitui ensaios com modelos reais.

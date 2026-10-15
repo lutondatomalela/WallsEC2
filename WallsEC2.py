@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "WallsEC2 - Paredes de Betão Armado (EC2)"
 APP_NAME = "WallsEC2"
-APP_VERSION = "v1.7.0-rc1"
+APP_VERSION = "v1.8.0-rc1"
 APP_AUTHOR = "Eng.º Lutonda Tomalela"
 APP_REPORT_AUTHOR = "https://github.com/lutondatomalela/WallsEC2"
 APP_SUBJECT = "Dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2"
@@ -451,7 +451,7 @@ class WallDesigner:
                             "alpha_cc": alpha_cc, "wmax": wmax_mm}.items():
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} deve ser positivo e finito")
-        if not math.isfinite(cover_mm) or cover_mm < 0 or 2 * (cover_mm + phi_max_mm) >= thickness_mm:
+        if not math.isfinite(cover_mm) or cover_mm < 0 or 2 * (cover_mm + 1.5 * phi_max_mm) >= thickness_mm:
             raise ValueError("Espessura insuficiente para duas faces e duas direcções de armadura")
         if not math.isfinite(aggregate_mm) or aggregate_mm < 0:
             raise ValueError("Dimensão do agregado inválida")
@@ -1007,6 +1007,36 @@ class WallDesigner:
             return "OK", f"combinação quase-permanente {self.qp_case}: wk,max={wk_max:.3f} mm ≤ wmax={self.wmax_mm:.3f} mm"
         return "Verificar", f"combinação quase-permanente {self.qp_case}: wk,max={wk_max:.3f} mm > wmax={self.wmax_mm:.3f} mm"
 
+    def composite_crack_details(self, normal, moment, plus, minus, direction):
+        sign = 1 if self.axial_convention == "Compressão positiva" else -1
+        pp, sp, _ = self.rebar_crack_geometry(plus)
+        pm, sm, _ = self.rebar_crack_geometry(minus)
+        section = self.section_for(plus, minus)
+        calculated = section.cracking(sign*normal, moment, pp, sp, pm, sm, self.creep_effective)
+        results = []
+        for face, sol, key in (("+", plus, "plus"), ("-", minus, "minus")):
+            value = calculated[key]
+            phi, spacing, families = self.rebar_crack_geometry(sol)
+            sigma = value["sigma_s"]
+            overstress = sigma > .8*self.fyk or calculated["service"]["concrete_max"] > .45*self.fck
+            # Limite conservador 7.3.2: kc=1 e Act=h/2 por face traccionada.
+            minimum_as = self.crack_min_as_per_face() / .4 if sigma > 1e-9 else 0.0
+            minimum_ok = sol.as_prov >= minimum_as - 1e-9
+            status = "OK" if value["wk"] <= self.wmax_mm and not overstress and minimum_ok else "Verificar"
+            reason = f"wk N-M={value['wk']:.3f} mm; σs={sigma:.1f} MPa; k2={value['k2']:.3f}"
+            if not minimum_ok:
+                reason += f"; As inferior ao mínimo conservador N-M ({minimum_as:.1f} mm²/m)"
+            if overstress:
+                reason += "; tensão ELS fora dos limites adoptados para modelo linear"
+            results.append(dict(Face=face,Direction=direction,Rebar=sol.text,
+                As_total_mm2_m=sol.as_prov,As_base_mm2_m=sol.as_base,As_add_mm2_m=sol.as_add,
+                phi_control_mm=phi,s_eff_mm=spacing,n_families=families,
+                sigma_s_MPa=sigma,phi_lim_EC2_mm=float("nan"),s_lim_EC2_mm=float("nan"),
+                sr_max_mm=value["sr_max"],wk_mm=value["wk"],wmax_mm=self.wmax_mm,
+                Status=status,Reason=reason,Note="EC2 7.3.4; N-M assinado, secção fendilhada; sem retracção impedida",
+                hc_eff_mm=value["hc_eff"],rho_eff=value["rho_eff"],k2=value["k2"],As_min_nm=minimum_as))
+        return results, calculated["service"]
+
     def case_role(self, value):
         if self.is_qp_case(value):
             return "ELS-QP"
@@ -1273,14 +1303,28 @@ class WallDesigner:
             crack_y_pos = empty_crack_detail("+", "Y", sol_y_pos.text, reason)
             crack_y_neg = empty_crack_detail("-", "Y", sol_y_neg.text, reason)
 
-        if max(abs(nxx), abs(nyy), abs(nxy)) > 1e-9 and self.is_qp_case(row.get("case", "")):
-            reason = "wk em flexão composta não avaliado; consultar tensões ELS N-M"
-            crack_x_pos = empty_crack_detail("+", "X", sol_x_pos.text, reason)
-            crack_x_neg = empty_crack_detail("-", "X", sol_x_neg.text, reason)
-            crack_y_pos = empty_crack_detail("+", "Y", sol_y_pos.text, reason)
-            crack_y_neg = empty_crack_detail("-", "Y", sol_y_neg.text, reason)
-            crack_status = "Não avaliado"
-            crack_note = reason
+        service_x = service_y = None
+        composite_wk_evaluated = False
+        membrane_present = max(abs(nxx), abs(nyy), abs(nxy)) > 1e-9
+        original_moments = not has_explicit_wa or not (bool(row.get("__missing_mxx", False)) or bool(row.get("__missing_myy", False)))
+        if membrane_present and self.is_qp_case(row.get("case", "")):
+            # Resolução N-M direccional, sem omitir efeitos NXY/MXY.
+            supported = nm_enabled and abs(nxy) <= 1e-9 and abs(mxy) <= 1e-9 and original_moments
+            if supported and self.wk_check_enabled:
+                (crack_x_pos, crack_x_neg), service_x = self.composite_crack_details(nxx, mxx, sol_x_pos, sol_x_neg, "X")
+                (crack_y_pos, crack_y_neg), service_y = self.composite_crack_details(nyy, myy, sol_y_pos, sol_y_neg, "Y")
+                details = (crack_x_pos, crack_x_neg, crack_y_pos, crack_y_neg)
+                crack_status = "Verificar" if any(v["Status"] == "Verificar" for v in details) else "OK"
+                crack_note = " | ".join(v["Reason"] for v in details)
+                composite_wk_evaluated = True
+            else:
+                reason = "wk N-M não avaliado: confirmar sinal N, momentos originais e ausência de NXY/MXY"
+                crack_x_pos = empty_crack_detail("+", "X", sol_x_pos.text, reason)
+                crack_x_neg = empty_crack_detail("-", "X", sol_x_neg.text, reason)
+                crack_y_pos = empty_crack_detail("+", "Y", sol_y_pos.text, reason)
+                crack_y_neg = empty_crack_detail("-", "Y", sol_y_neg.text, reason)
+                crack_status = "Não avaliado"
+                crack_note = reason
 
         wk_x_pos = float(crack_x_pos["wk_mm"]); sig_x_pos = float(crack_x_pos["sigma_s_MPa"]); sr_x_pos = float(crack_x_pos["sr_max_mm"])
         wk_x_neg = float(crack_x_neg["wk_mm"]); sig_x_neg = float(crack_x_neg["sigma_s_MPa"]); sr_x_neg = float(crack_x_neg["sr_max_mm"])
@@ -1309,7 +1353,7 @@ class WallDesigner:
             notes.append("momentos Wood-Armer M+/M- importados; MXY não é reaplicado")
         if missing_qxx or missing_qyy:
             notes.append("QXX/QYY não fornecido: esforço transverso não verificado nesta linha")
-        zero_efforts = max(abs(mxx), abs(myy), abs(mxy), mx_pos, mx_neg, my_pos, my_neg) < 1e-9 and max(abs(qxx), abs(qyy)) < 1e-9
+        zero_efforts = max(abs(mxx), abs(myy), abs(mxy), mx_pos, mx_neg, my_pos, my_neg, abs(nxx), abs(nyy), abs(nxy)) < 1e-9 and max(abs(qxx), abs(qyy)) < 1e-9
         if self.moment_factor != 1.0 or self.shear_factor != 1.0:
             notes.append(f"unidades convertidas para kNm/m e kN/m: M x{self.moment_factor:g}, Q x{self.shear_factor:g}")
         if self.wk_check_enabled:
@@ -1410,7 +1454,7 @@ class WallDesigner:
                 reason_items.append("estado atribuído por combinação de avisos")
                 action_items.append("rever notas de cálculo")
 
-        if missing_qxx or missing_qyy or (not has_explicit_wa and bool(row.get("__missing_mxy", False))) or crack_status == "Não avaliado" or (not nm_enabled and max(abs(nxx), abs(nyy)) > 1e-9) or abs(nxy) > 1e-9 or any(abs(safe_float(row.get(c, 0.0), 0.0)) > 1e-9 for c in ("nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa")):
+        if missing_qxx or missing_qyy or (not has_explicit_wa and bool(row.get("__missing_mxy", False))) or (crack_status == "Não avaliado" and self.is_qp_case(row.get("case", ""))) or (not nm_enabled and max(abs(nxx), abs(nyy)) > 1e-9) or abs(nxy) > 1e-9 or any(abs(safe_float(row.get(c, 0.0), 0.0)) > 1e-9 for c in ("nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa")):
             if status in ("OK", "OK*"):
                 status = "Verificar"
             reason_items.append("Verificações incompletas: corte/ELS ou esforços de membrana não verificados")
@@ -1420,7 +1464,6 @@ class WallDesigner:
             status = "Não conforme"
             reason_items.append("Armadura horizontal inferior ao mínimo relativo à armadura vertical adoptada (9.6.3)")
 
-        service_x = service_y = None
         if nm_enabled:
             if self.is_qp_case(row.get("case", "")):
                 sign = 1 if self.axial_convention == "Compressão positiva" else -1
@@ -1429,9 +1472,9 @@ class WallDesigner:
                     service_y = self.section_for(sol_y_pos, sol_y_neg).service(sign*nyy, myy, self.creep_effective)
                 else:
                     reason_items.append("Tensões ELS N-M não avaliadas: fornecer momentos originais assinados")
-                if max(abs(nxx), abs(nyy)) > 1e-9:
+                if max(abs(nxx), abs(nyy)) > 1e-9 and not composite_wk_evaluated:
                     status = "Verificar" if status != "Não conforme" else status
-                    reason_items.append("wk N-M requer integração específica; tensões ELS apenas com momentos originais")
+                    reason_items.append("wk N-M não avaliado para os dados/hipóteses desta linha")
             else:
                 util = max(util, nm_x["utilisation"], nm_y["utilisation"])
                 if max(nm_x["utilisation"],nm_y["utilisation"]) > 1:
@@ -1448,6 +1491,8 @@ class WallDesigner:
                 status = "Verificar"
             reason_items.append("Definir conjunto ELU explícito para separar dimensionamento e ELS")
 
+        if status not in ("OK", "OK*"):
+            reason_items = [r for r in reason_items if r not in ("cumpre as verificações implementadas", "cumpre, mas com aviso menor")]
         verification_reason = " | ".join(dict.fromkeys(str(x) for x in reason_items if str(x).strip()))
         recommended_action = " | ".join(dict.fromkeys(str(x) for x in action_items if str(x).strip()))
 
@@ -1467,6 +1512,15 @@ class WallDesigner:
             "Moment_unit": self.moment_unit,
             "Shear_unit": self.shear_unit,
             "Combo_type": self.case_role(row.get("case", "")),
+            "Crack_model": "N-M fendilhado" if composite_wk_evaluated else "Flexão simples" if not membrane_present else "Não avaliado",
+            "Crack_k2_x+": crack_x_pos.get("k2", float("nan")),
+            "Crack_k2_x-": crack_x_neg.get("k2", float("nan")),
+            "Crack_k2_y+": crack_y_pos.get("k2", float("nan")),
+            "Crack_k2_y-": crack_y_neg.get("k2", float("nan")),
+            "Crack_hceff_x+_mm": crack_x_pos.get("hc_eff_mm", float("nan")),
+            "Crack_hceff_x-_mm": crack_x_neg.get("hc_eff_mm", float("nan")),
+            "Crack_hceff_y+_mm": crack_y_pos.get("hc_eff_mm", float("nan")),
+            "Crack_hceff_y-_mm": crack_y_neg.get("hc_eff_mm", float("nan")),
             "Axial_convention": self.axial_convention,
             "NM_X_util": nm_x["utilisation"] if nm_x else float("nan"),
             "NM_Y_util": nm_y["utilisation"] if nm_y else float("nan"),
@@ -1637,7 +1691,29 @@ class WallDesigner:
                     raise ValueError(f"Painel {panel} sem combinação ELU")
                 mesh = adopted_by_panel[panel]
                 check = self.design_one(row, mesh)
-                if abs(check["NXX_kN_m"]) + abs(check["NYY_kN_m"]) <= 1e-9:
+                if check["Crack_model"] == "N-M fendilhado":
+                    for _ in range(16):
+                        modified = False
+                        for j, (normal_key, moment_key, vertical, direction) in enumerate((
+                            ("NXX_kN_m", "MXX_kNm_m", not self.local_y_is_vertical, "X"),
+                            ("NYY_kN_m", "MYY_kNm_m", self.local_y_is_vertical, "Y"))):
+                            pair = 2*j
+                            details, _service = self.composite_crack_details(check[normal_key], check[moment_key], mesh[pair], mesh[pair+1], direction)
+                            for face_index, detail in enumerate(details):
+                                if detail["Status"] != "Verificar" or detail["sigma_s_MPa"] <= 1e-9:
+                                    continue
+                                idx = pair + face_index
+                                target = max(mesh[idx].as_prov * 1.2, detail["As_min_nm"])
+                                try:
+                                    candidate = self.optimize_rebar_solution(target, self.max_spacing_for_direction(vertical), vertical, direction)
+                                except ValueError:
+                                    continue
+                                if candidate.as_prov > mesh[idx].as_prov + 1e-9:
+                                    mesh[idx] = candidate
+                                    modified = True
+                        if not modified:
+                            break
+                elif abs(check["NXX_kN_m"]) + abs(check["NYY_kN_m"]) <= 1e-9:
                     for j, (label, key, vertical) in enumerate((("X+", "Mx+_WA", not self.local_y_is_vertical),
                         ("X-", "Mx-_WA", not self.local_y_is_vertical), ("Y+", "My+_WA", self.local_y_is_vertical),
                         ("Y-", "My-_WA", self.local_y_is_vertical))):
@@ -1649,7 +1725,14 @@ class WallDesigner:
             results.append(self.design_one(row, adopted_by_panel[str(row.get("panel", ""))]))
             if progress:
                 progress(i, len(df))
-        return pd.DataFrame(results)
+        output = pd.DataFrame(results)
+        if self.wk_check_enabled:
+            qp_panels = set(df.loc[df["case"].map(self.is_qp_case), "panel"].astype(str))
+            for idx in output.index[~output["Panel"].astype(str).isin(qp_panels)]:
+                if output.at[idx, "Status"] in ("OK", "OK*"):
+                    output.at[idx, "Status"] = "Verificar"
+                output.at[idx, "Verification_reason"] += " | Painel sem combinação QP para verificar a malha adoptada"
+        return output
 
 
 # ============================================================
@@ -2083,7 +2166,7 @@ class WallsEC2App(tk.Tk):
 
             "LIMITAÇÕES DESTA VERSÃO\n"
             "- Não substitui a verificação global de paredes comprimidas.\n"
-            "- Não inclui flexão composta N-M, estabilidade, segunda ordem ou encurvadura.\n"
+            "- N-M e segunda ordem são verificados por faixa; estabilidade global e NXY requerem análise específica.\n"
             "- A verificação de wk é uma verificação por flexão em ELS; retracção, temperatura, restrição na base, juntas e requisitos especiais de estanquidade devem ser avaliados separadamente quando forem condicionantes.\n"
             "- O PDF apresenta o resumo de projecto; o Excel contém os dados completos para auditoria.\n"
         )
@@ -2740,10 +2823,10 @@ class WallsEC2App(tk.Tk):
             ("Distância livre", "Verificada na escolha automática", "A solução automática rejeita combinações em que a distância livre seja inferior a max(Ø; dg+5; 20 mm)."),
             ("Corte", "VRd,c tipo laje + VRd,max", "A verificação ao esforço transverso é feita sem armadura específica. Se VEd>VRd,c, o programa assinala 'Verificar'; se VEd>VRd,max simplificado, assinala 'Não conforme'."),
             ("Fendilhação", f"wmax = {designer.wmax_mm:.2f} mm", f"Sem selecção de wk: não é calculada a largura de fenda; fica apenas o controlo indirecto por diâmetro/espaçamento. Com wk seleccionado: cálculo apenas para a combinação quase-permanente indicada ({designer.qp_case or 'não indicada'})."),
-            ("Armadura mínima por fendilhação", f"As,min,crack = {designer.crack_min_as_per_face():.1f} mm²/m/face", "Aplicada aproximação de EC2 7.3.2 com Act igual à meia espessura traccionada por face."),
+            ("Armadura mínima por fendilhação", f"Flexão: {designer.crack_min_as_per_face():.1f} mm²/m/face", "EC2 7.3.2: aproximação em flexão com kc=0,4. Para N-M adopta-se kc=1 e Act=h/2 por face traccionada, conservador."),
             ("Unidades", f"M: {designer.moment_unit}; Q: {designer.shear_unit}", "Os valores são convertidos internamente para kNm/m e kN/m. Confirmar sempre as unidades da tabela de origem antes de adoptar os resultados."),
             ("Optimização de armaduras", "Base + reforços" if designer.optimize_rebar else "Automática directa", f"Base vertical Ø{designer.base_vertical_phi:.0f}//{designer.base_vertical_spacing:.0f}; base horizontal Ø{designer.base_horizontal_phi:.0f}//{designer.base_horizontal_spacing:.0f}. Quando a base é insuficiente, o programa tenta adicionar reforço local antes de declarar insuficiência à flexão ou corte."),
-            ("Limitação", "Sem verificação completa N-M", "A verificação de parede comprimida, estabilidade, segunda ordem e flexão composta requer esforços normais/membrana e geometria global da parede."),
+            ("Limitação", "Modelo de faixa isolada", "Inclui N-M com sinal de N definido e segunda ordem com l0 fornecido. Não inclui estabilidade global ou membrana NXY. wk N-M exige momentos originais sem NXY/MXY."),
         ]
         return pd.DataFrame(notes, columns=["Tema", "Critério adoptado", "Nota"])
 
@@ -2896,7 +2979,7 @@ class WallsEC2App(tk.Tk):
                 ["Tipo de ficheiro", "Resultados de cálculo"],
                 ["Norma de referência", "Eurocódigo 2 / NP EN 1992-1-1"],
                 ["Âmbito", "Paredes modeladas como painéis/placas, com esforços por metro"],
-                ["Limitações", "Inclui N-M de faixa quando a convenção N é definida; segunda ordem apenas de faixa isolada com l0. Não inclui estabilidade global, membrana NXY ou wk composto"],
+                ["Limitações", "Inclui N-M de faixa quando a convenção N é definida; segunda ordem apenas de faixa isolada com l0. Não inclui estabilidade global ou membrana NXY; wk N-M apenas sem NXY/MXY e com momentos originais"],
                 ["Unidades internas", "Momentos em kNm/m; corte em kN/m"],
                 ["Descrição", APP_XLSX_DESCRIPTION],
             ], columns=["Campo", "Valor"])
@@ -2951,7 +3034,9 @@ class WallsEC2App(tk.Tk):
                 "util_Qx_VRdmax", "util_Qy_VRdmax", "Transverse_links_required", "Transverse_links_note"
             ])
             row_cracking = pick_cols(self.df_results, [
-                "Panel", "Node", "Case", "is_QP_crack_case", "wmax_mm",
+                "Panel", "Node", "Case", "is_QP_crack_case", "wmax_mm", "Crack_model",
+                "Crack_k2_x+", "Crack_k2_x-", "Crack_k2_y+", "Crack_k2_y-",
+                "Crack_hceff_x+_mm", "Crack_hceff_x-_mm", "Crack_hceff_y+_mm", "Crack_hceff_y-_mm",
                 "wk_x+_mm", "wk_x-_mm", "wk_y+_mm", "wk_y-_mm", "wk_max_mm",
                 "sigma_s_x+_MPa", "sigma_s_x-_MPa", "sigma_s_y+_MPa", "sigma_s_y-_MPa",
                 "phi_ctrl_x+_mm", "phi_ctrl_x-_mm", "phi_ctrl_y+_mm", "phi_ctrl_y-_mm",
@@ -3153,6 +3238,7 @@ class WallsEC2App(tk.Tk):
             "15_Full_Results": "Tabela completa de resultados para auditoria",
             "16_Raw_Table": "Tabela importada já normalizada",
             "17_EC2_Notes": "Notas normativas e limitações",
+            "18_NM_Stability": "Interacção N-M, segunda ordem da faixa e tensões ELS",
         }
         return descriptions.get(sheet_name, "")
 
@@ -3197,11 +3283,11 @@ class WallsEC2App(tk.Tk):
             # Formatação pedida para a memória de ccálculo:
             # texto em Courier 10, subtítulos em Courier-Bold 12, espaçamento 1.5.
             styles.add(ParagraphStyle(name="ReportTitle", parent=styles["Title"], alignment=TA_CENTER, fontName="Courier-Bold", fontSize=14, leading=21, spaceAfter=10))
-            styles.add(ParagraphStyle(name="ReportSubtitle", parent=styles["Normal"], alignment=TA_CENTER, fontName="Courier", fontSize=10, leading=15, textColor=colors.darkgrey, spaceAfter=8))
+            styles.add(ParagraphStyle(name="ReportSubtitle", parent=styles["Normal"], alignment=TA_CENTER, fontName="Courier", fontSize=10, leading=15, textColor=colors.HexColor("#444444"), spaceAfter=8))
             styles.add(ParagraphStyle(name="BodyCourier", parent=styles["Normal"], fontName="Courier", fontSize=10, leading=15, spaceAfter=6))
             styles.add(ParagraphStyle(name="Small", parent=styles["Normal"], fontName="Courier", fontSize=8, leading=12))
             styles.add(ParagraphStyle(name="Cell", parent=styles["Small"], alignment=TA_LEFT, fontName="Courier", fontSize=7, leading=10.5))
-            styles.add(ParagraphStyle(name="Section", parent=styles["Heading2"], fontName="Courier-Bold", fontSize=12, leading=18, spaceBefore=10, spaceAfter=20))
+            styles.add(ParagraphStyle(name="Section", keepWithNext=True, parent=styles["Heading2"], fontName="Courier-Bold", fontSize=12, leading=18, spaceBefore=10, spaceAfter=20))
 
             def header_footer(canvas, doc_obj):
                 canvas.saveState()
@@ -3297,6 +3383,9 @@ class WallsEC2App(tk.Tk):
                 return s
 
             PDF_HEADER_MAP = {
+                "NM_X_util": "Util. N-M X", "NM_Y_util": "Util. N-M Y",
+                "Stability_l0_mm": "l0 [mm]", "Stability_X_amplification": "Majoração X",
+                "Stability_Y_amplification": "Majoração Y",
                 "Panel": "Painel",
                 "Node": "Nó",
                 "Case": "Caso",
@@ -3371,6 +3460,9 @@ class WallsEC2App(tk.Tk):
                     data.append([as_par(row[c], c) for c in main_cols])
                 if widths is None:
                     widths = [max(18 * mm, min(34 * mm, 6 * mm + len(str(PDF_HEADER_MAP.get(c, c))) * 1.1 * mm)) for c in main_cols]
+                usable_width = page_size[0] - margin_l - margin_r
+                if sum(widths) > usable_width:
+                    widths = [w * usable_width / sum(widths) for w in widths]
                 tbl = Table(data, repeatRows=1, colWidths=widths)
                 tbl.setStyle(TableStyle([
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9EAF7")),
@@ -3425,9 +3517,11 @@ class WallsEC2App(tk.Tk):
                         continue
                     valid = g[pd.to_numeric(g["wk_max_mm"], errors="coerce").notna()].copy()
                     if valid.empty:
-                        continue
-                    idx = pd.to_numeric(valid["wk_max_mm"], errors="coerce").idxmax()
-                    r = valid.loc[idx]
+                        r = g.iloc[0].copy()
+                        r["Crack_control_status"] = "Não avaliado"
+                    else:
+                        idx = pd.to_numeric(valid["wk_max_mm"], errors="coerce").idxmax()
+                        r = valid.loc[idx]
                     vals = {c: safe_float(r.get(c, float("nan")), float("nan")) for c in wk_cols}
                     finite_vals = {c: v for c, v in vals.items() if math.isfinite(v)}
                     if finite_vals:
@@ -3473,6 +3567,11 @@ class WallsEC2App(tk.Tk):
                 ["Unidades de momentos", self.var_moment_unit.get()],
                 ["Unidades de esforço transverso", self.var_shear_unit.get()],
                 ["Verificação wk", "Sim" if self.var_crack_check.get() else "Não"],
+                ["ELU seleccionadas", self.var_elu_cases.get() or "não indicadas"],
+                ["Convenção N", self.var_axial_convention.get()],
+                ["l0 da faixa", self.var_l0.get() + " mm"],
+                ["Fluência efectiva", self.var_phi_eff.get()],
+                ["Extensão última aço", self.var_eps_ud.get()],
                 ["Combinação quase-permanente", self.var_qp_case.get() or "não indicada"],
                 ["Limite wmax", f"{self.var_wmax.get()} mm"],
                 ["Optimização de armaduras", (self.var_rebar_strategy.get() if self.var_optimize_rebar.get() else "Automática directa")],
@@ -3496,9 +3595,9 @@ class WallsEC2App(tk.Tk):
                 f"Foram analisadas {n_lines} linhas de esforços, correspondentes a {n_panels} painéis. "
                 f"Estados globais por painel: {status_counts}. "
                 "O cálculo considera os painéis como elementos de placa/casca, com dimensionamento por faixas de 1 m. "
-                "A verificação à compressão, flexão composta global, estabilidade e efeitos de segunda ordem não está incluída neste anexo."
+                "N-M e segunda ordem são verificações de faixa, quando os parâmetros necessários estão definidos. A estabilidade global da parede não está incluída."
             )
-            story.append(Paragraph("Resumo executivo", styles["Section"]))
+            story.append(Paragraph("Síntese das verificações", styles["Section"]))
             story.append(Paragraph(resumo_txt, styles["BodyCourier"]))
             story.append(Spacer(1, 8))
             self.progress_var.set(20.0); self.update_idletasks()
@@ -3518,11 +3617,16 @@ class WallsEC2App(tk.Tk):
                 "Panel", "Node", "Case", "wk_x+_mm", "wk_x-_mm", "wk_y+_mm", "wk_y-_mm", "wk_max_mm", "wmax_mm", "Crack_gov", "Crack_control_status", "Crack_control_note"
             ], max_rows=36, note_cols=["Crack_control_note"], widths=[16*mm, 16*mm, 22*mm, 18*mm, 18*mm, 18*mm, 18*mm, 18*mm, 16*mm, 18*mm, 22*mm])
             story.append(Paragraph("Nota: wk_x+/wk_x-/wk_y+/wk_y- correspondem às faces e direcções locais do painel. O valor wk máx. é o valor governante para a combinação quase-permanente indicada.", styles["Small"]))
+            add_table("Interacção N-M e segunda ordem da faixa", self.df_results, cols=[
+                "Panel", "Case", "NM_X_util", "NM_Y_util", "Stability_l0_mm",
+                "Stability_X_amplification", "Stability_Y_amplification", "Status"
+            ], max_rows=36, widths=[22*mm,22*mm,30*mm,30*mm,30*mm,36*mm,36*mm,36*mm])
+            story.append(Paragraph("Nota: modelo de faixa isolada; l0 e fluência efectiva definidos pelo projectista. Não constitui análise de estabilidade global. wk N-M apenas com N assinado, momentos originais e ausência de NXY/MXY. Consultar a folha Excel 18_NM_Stability e os estados não avaliados.", styles["Small"]))
             self.progress_var.set(58.0); self.update_idletasks()
 
             add_table("4. Zonas de armadura", self.df_zones, cols=[
                 "Zona", "Painéis", "Status", "util_max", "X+", "X-", "Y+", "Y-", "Armadura transversal", "Nota"
-            ], max_rows=40)
+            ], max_rows=40, note_cols=["Nota"])
 
             add_table("5. Optimização de armaduras", self.df_optimization, cols=[
                 "Panel", "Status", "Optimization_mode", "X+_base", "X+_additional", "X+_rebar", "Y+_base", "Y+_additional", "Y+_rebar", "util_max"
@@ -3542,7 +3646,7 @@ class WallsEC2App(tk.Tk):
 
             add_table("9. Verificação de unidades e consistência", self.df_unit_check, cols=[
                 "Grandeza", "Unidade selecionada", "Factor aplicado", "Máximo convertido", "Unidade interna", "Nota"
-            ], max_rows=10)
+            ], max_rows=10, widths=[38*mm,35*mm,20*mm,28*mm,25*mm,119*mm])
             add_table("10. Notas normativas e hipóteses de cálculo", self.df_notes, cols=[
                 "Tema", "Critério adoptado", "Nota"
             ], max_rows=30, widths=[40*mm, 55*mm, 155*mm])

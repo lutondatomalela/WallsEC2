@@ -52,6 +52,13 @@ class SectionTests(unittest.TestCase):
         m=s.moment_bounds(0)
         self.assertGreater(-m[0],m[1])
 
+    def test_asymmetric_pure_tension_requires_eccentricity(self):
+        s=sec(as_plus=500,as_minus=1500)
+        n,m=s.response(-.01,-.01)
+        self.assertNotAlmostEqual(m,0)
+        self.assertEqual(s.check(n,m)['status'],'OK')
+        self.assertEqual(s.check(n,0)['status'],'Não conforme')
+
     def test_bending_limit(self):
         s=sec()
         limit=s.moment_bounds(0)[1]
