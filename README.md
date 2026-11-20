@@ -2,7 +2,7 @@
 
 Ferramenta Python para dimensionamento e verificação de faixas de paredes de betão armado, a partir de esforços por metro de modelos de placa/casca, segundo o Eurocódigo 2.
 
-## Versão de validação 1.8.0-rc1
+## Versão de validação 1.8.1-rc1
 
 Esta versão inclui flexão simples, interacção N-M de faixa por compatibilidade de extensões, tensões ELS de secção fendilhada e segunda ordem pelo método da rigidez nominal para faixas isoladas. A convenção de esforço normal é seleccionada explicitamente. O comprimento efectivo é definido pelo projectista.
 
@@ -50,10 +50,18 @@ Não estão incluídas verificações completas de membrana NXY, sismo, amarraç
 python -m unittest discover -s tests -v
 ```
 
-58 testes locais aprovados, incluindo equilíbrio de secção, convergência, rigidez nominal, importação/unidades, combinação de casos e exportação XLSX. Integração contínua configurada para Windows/Linux e Python 3.10/3.12; a base anterior passou nas quatro configurações; os testes desta revisão devem ser consultados na pull request.
+70 testes locais aprovados, incluindo equilíbrio de secção, convergência, rigidez nominal, importação/unidades, combinação de casos e exportação XLSX. Integração contínua configurada para Windows/Linux e Python 3.10/3.12; a base anterior passou nas quatro configurações; os testes desta revisão devem ser consultados na pull request.
 
 Consultar [validação e hipóteses](docs/VALIDATION.md), [motor N-M](docs/SECTION_MODEL.md) e [histórico](CHANGELOG.md).
 
 ## Licença
 
 MIT, conforme [LICENSE](LICENSE). As normas usadas na revisão não são redistribuídas.
+
+## Tabelas normal e W&A/NMises
+
+A importação aceita CSV UTF-16 com separador ponto e vírgula e vírgula decimal. No botão «Importar tabela(s)», pode seleccionar uma tabela ou seleccionar em conjunto a tabela normal e a W&A/NMises (Ctrl+clique no diálogo).
+
+A junção usa painel+nó+número de caso, exige correspondência completa e recusa duplicados ou valores sobrepostos em conflito. Os momentos W&A são usados directamente; MXX/MYY/MXY e NXX/NYY/NXY originais ficam preservados. NMises é apenas informativo e não é transformado em força axial assinada.
+
+QXX/QYY não fornecidos permanecem não avaliados. A interface mostra uma pré-visualização de até 1000 linhas; o conjunto completo é mantido para cálculo/exportação. A espessura inicial desta versão de ensaio é 250 mm. Confirmar sempre os restantes parâmetros e a classificação das combinações.

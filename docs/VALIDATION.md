@@ -6,7 +6,7 @@ Referência consultada: NP EN 1992-1-1:2010 e Anexo Nacional, AC:2012 e A1:2019 
 
 `python -m unittest discover -s tests -v`
 
-58 testes locais aprovados. Compilação Python e verificação de diferenças de código sem erros. A base anterior passou em Windows/Linux, Python 3.10/3.12; a revisão actual é submetida à mesma matriz de integração contínua.
+70 testes locais aprovados. Compilação Python e verificação de diferenças de código sem erros. A base anterior passou em Windows/Linux, Python 3.10/3.12; a revisão actual é submetida à mesma matriz de integração contínua.
 
 ## Evidência
 
@@ -28,3 +28,7 @@ Verifica faixas de 1 m à flexão transversal e N-M direccional. Segunda ordem a
 wk composto exige momentos originais assinados e ausência de NXY/MXY. A fluência entra de forma linear no modelo ELS; tensões acima dos limites adoptados geram aviso. A armadura mínima N-M usa uma aproximação conservadora, documentada em SECTION_MODEL.md.
 
 Persistem ensaios com ficheiros reais, revisão visual GUI, comparação independente com outro programa/casos de referência publicados e validação do executável Windows. A contagem de testes não constitui certificação de utilização autónoma em projecto.
+
+## Importação de tabelas reais
+
+Dois CSV UTF-16, ambos com 90 780 linhas e 28 painéis, importados e associados integralmente por painel/nó/caso. Sem chaves duplicadas. NMises preservado e comparado com o invariante calculado de NXX/NYY/NXY: diferença máxima 0,0157 kN/m, compatível com o arredondamento da tabela. Ensaio de compatibilidade do caminho de flexão em 1090 linhas, incluindo extremos por painel, sem erros. Não constitui dimensionamento ELU/ELS do projecto: os parâmetros de material/recobrimento e a classificação das combinações não foram confirmados.

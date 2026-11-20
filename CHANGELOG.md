@@ -1,5 +1,14 @@
 # Histórico de alterações
 
+## 1.8.1-rc1 — 2026-11-20
+
+- Correcção da detecção BOM/UTF-16 na importação CSV para evitar linhas espúrias e identificadores vazios.
+- Junção de tabelas complementares por painel+nó+caso, com validação de unicidade, correspondência e conflitos/unidades.
+- NMises preservado como informativo, sem o converter em NXX/NYY/NXY.
+- Selecção simultânea de tabelas na GUI; espessura inicial de ensaio de 250 mm.
+- Pré-visualização limitada a 1000 linhas e progresso também na primeira passagem de cálculo.
+- 70 testes de regressão; importação conjunta integral de 90 780 linhas e ensaio de compatibilidade em amostra de 1090 registos de tabelas reais.
+
 ## 1.8.0-rc1 — 2026-10-15
 
 - wk em N-M direccional: secção fendilhada, k2 variável, área efectiva por face e mínimos conservadores.

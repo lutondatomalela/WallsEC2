@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "WallsEC2 - Paredes de Betão Armado (EC2)"
 APP_NAME = "WallsEC2"
-APP_VERSION = "v1.8.0-rc1"
+APP_VERSION = "v1.8.1-rc1"
 APP_AUTHOR = "Eng.º Lutonda Tomalela"
 APP_REPORT_AUTHOR = "https://github.com/lutondatomalela/WallsEC2"
 APP_SUBJECT = "Dimensionamento e verificação de paredes de betão armado segundo o Eurocódigo 2"
@@ -33,7 +33,7 @@ APP_KEYWORDS = "WallsEC2, Eurocódigo 2, EC2, NP EN 1992-1-1, paredes de betão 
 APP_CATEGORY = "Structural Engineering / Reinforced Concrete Design"
 APP_XLSX_DESCRIPTION = "Workbook de cálculo com dados de entrada, validação, resultados por painel, armaduras, fendilhação, corte e diagnóstico."
 GITHUB_URL = "https://github.com/lutondatomalela/WallsEC2"
-MAX_PREVIEW_ROWS = 20000
+MAX_PREVIEW_ROWS = 1000
 
 
 # ============================================================
@@ -122,6 +122,7 @@ COLUMN_ALIASES = {
     "nxx": ["nxx (kn/m)", "nxx [kn/m]", "nxx", "nx (kn/m)", "nx [kn/m]", "nx"],
     "nyy": ["nyy (kn/m)", "nyy [kn/m]", "nyy", "ny (kn/m)", "ny [kn/m]", "ny"],
     "nxy": ["nxy (kn/m)", "nxy [kn/m]", "nxy"],
+    "nmises": ["nmises", "nmises (kn/m)", "nmises [kn/m]", "n mises (kn/m)"],
 }
 
 
@@ -225,7 +226,12 @@ def read_csv_robust(path: str) -> pd.DataFrame:
     Tenta automaticamente encoding e separador. Mantém tudo como texto para preservar
     vírgulas decimais; a conversão numérica é feita depois por safe_float().
     """
-    encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1", "utf-16"]
+    with open(path, "rb") as stream:
+        prefix = stream.read(4)
+    if prefix.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings = ["utf-16"]
+    else:
+        encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
     attempts = []
     for enc in encodings:
         # sep=None usa o detector do pandas; depois tenta separadores explícitos.
@@ -238,7 +244,7 @@ def read_csv_robust(path: str) -> pd.DataFrame:
                     kwargs["sep"] = sep
                 df = pd.read_csv(path, **kwargs)
                 # Aceita a primeira leitura com mais de uma coluna ou, no mínimo, dados.
-                if df is not None and not df.empty and len(df.columns) > 1:
+                if df is not None and not df.empty and len(df.columns) > 1 and not any("\x00" in str(c) for c in df.columns):
                     return df
                 attempts.append((enc, sep, len(df.columns) if df is not None else 0))
             except Exception as exc:
@@ -282,6 +288,8 @@ def split_panel_node_case(s: str) -> Tuple[str, str, str]:
     panel = parts[0] if len(parts) > 0 else ""
     node = parts[1] if len(parts) > 1 else ""
     case = parts[2] if len(parts) > 2 else ""
+    panel = re.sub(r"\*+$", "", panel).strip()
+    node = re.sub(r"\*+$", "", node).strip()
     return panel, node, case
 
 
@@ -294,7 +302,7 @@ def canonical_case_id(value: object) -> str:
 
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    df = rename_known_columns(df)
+    df = rename_known_columns(df).reset_index(drop=True)
     df["__row_order"] = range(len(df))
 
     if "panel_node_case" in df.columns:
@@ -319,7 +327,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df["case_id"] = df["case"].map(canonical_case_id)
 
     numeric_cols = [
-        "mxx", "myy", "mxy", "qxx", "qyy", "nxx", "nyy", "nxy",
+        "mxx", "myy", "mxy", "qxx", "qyy", "nxx", "nyy", "nxy", "nmises",
         "mxx_pos_wa", "mxx_neg_wa", "myy_pos_wa", "myy_neg_wa",
         "nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa",
     ]
@@ -335,6 +343,67 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = values
 
     return df
+
+
+def combine_effort_tables(tables):
+    """Junta tabelas complementares pela mesma identidade painel/nó/caso.
+
+    Sem somar esforços ou juntar registos por posição. Recusa chaves diferentes,
+    duplicadas, unidades incompatíveis e sobreposições em conflito.
+    """
+    if not tables:
+        raise ValueError("Seleccionar pelo menos uma tabela")
+    work = []
+    header_units = {"moment": set(), "force": set()}
+    for table in tables:
+        for column in table.columns:
+            header = normalize_text(column).replace(" ", "")
+            if header.startswith(("mxx", "myy", "mxy")):
+                for unit in ("knmm/m", "nmm/mm", "knm/m", "nm/m"):
+                    if unit in header:
+                        header_units["moment"].add(moment_unit_factor_to_kNm_per_m(unit))
+                        break
+            elif header.startswith(("nxx", "nyy", "nxy", "nmises", "qxx", "qyy")):
+                for unit in ("kn/m", "n/mm", "n/m"):
+                    if unit in header:
+                        header_units["force"].add(shear_unit_factor_to_kN_per_m(unit))
+                        break
+        if any(len(values) > 1 for values in header_units.values()):
+            raise ValueError("Unidades incompatíveis entre tabelas; converter antes da junção")
+        original = rename_known_columns(table)
+        checked = clean_dataframe(table)
+        if checked.empty:
+            raise ValueError("Tabela de esforços vazia")
+        keys = pd.MultiIndex.from_arrays([checked["panel"].astype(str).str.strip(),
+            checked["node"].astype(str).str.strip(), checked["case_id"].astype(str).str.strip()],
+            names=["panel", "node", "case_id"])
+        if any((checked[c].astype(str).str.strip() == "").any() for c in ("panel", "node", "case_id")):
+            raise ValueError("A junção exige painel, nó e número de caso em todas as linhas")
+        if keys.has_duplicates:
+            raise ValueError("Chaves painel/nó/caso duplicadas; não é possível juntar sem ambiguidade")
+        original.index = keys
+        work.append(original)
+    combined = work[0].copy()
+    id_cols = {"panel_node_case", "panel", "node", "case", "case_id", "panel_from_id"}
+    numeric_cols = set(COLUMN_ALIASES) - id_cols
+    for other in work[1:]:
+        absent = combined.index.difference(other.index)
+        extra = other.index.difference(combined.index)
+        if len(absent) or len(extra):
+            raise ValueError(f"Tabelas não coincidentes: {len(absent)} chaves em falta e {len(extra)} adicionais. Não foram associadas linhas de painéis/nós/casos diferentes.")
+        other = other.reindex(combined.index)
+        for col in other.columns:
+            if col in combined.columns:
+                if col in numeric_cols:
+                    left = combined[col].map(safe_float)
+                    right = other[col].map(safe_float)
+                    if not ((left-right).abs() <= 1e-9).all():
+                        raise ValueError(f"Valores em conflito na coluna {col}")
+                continue
+            combined[col] = other[col]
+    combined = combined.reset_index(drop=True)
+    combined["source_tables_count"] = len(tables)
+    return combined
 
 
 def reduce_to_governing_cases(df: pd.DataFrame) -> pd.DataFrame:
@@ -1454,6 +1523,13 @@ class WallDesigner:
                 reason_items.append("estado atribuído por combinação de avisos")
                 action_items.append("rever notas de cálculo")
 
+        missing_membrane = all(bool(row.get(f"__missing_{c}", c not in row.index)) for c in ("nxx", "nyy", "nxy"))
+        nmises_only = not bool(row.get("__missing_nmises", "nmises" not in row.index)) and missing_membrane
+        if nmises_only:
+            if status in ("OK", "OK*"):
+                status = "Verificar"
+            reason_items.append("NMises é informativo; fornecer NXX/NYY/NXY assinados para N-M/membrana")
+            action_items.append("Importar em conjunto a tabela normal com os mesmos painéis/nós/casos")
         if missing_qxx or missing_qyy or (not has_explicit_wa and bool(row.get("__missing_mxy", False))) or (crack_status == "Não avaliado" and self.is_qp_case(row.get("case", ""))) or (not nm_enabled and max(abs(nxx), abs(nyy)) > 1e-9) or abs(nxy) > 1e-9 or any(abs(safe_float(row.get(c, 0.0), 0.0)) > 1e-9 for c in ("nxx_pos_wa", "nxx_neg_wa", "nyy_pos_wa", "nyy_neg_wa")):
             if status in ("OK", "OK*"):
                 status = "Verificar"
@@ -1548,6 +1624,9 @@ class WallDesigner:
             "NXX_kN_m": nxx,
             "NYY_kN_m": nyy,
             "NXY_kN_m": nxy,
+            "NMises_kN_m": safe_float(row.get("nmises", 0.0), 0.0) * self.shear_factor if not bool(row.get("__missing_nmises", "nmises" not in row.index)) else float("nan"),
+            "NMises_usage": "Informativo; não substitui NXX/NYY/NXY" if not bool(row.get("__missing_nmises", "nmises" not in row.index)) else "Não fornecido",
+            "Source_tables_count": row.get("source_tables_count", 1),
             "Mx+_WA": mx_pos,
             "Mx-_WA": mx_neg,
             "My+_WA": my_pos,
@@ -1671,7 +1750,11 @@ class WallDesigner:
         elu_df = df.loc[~df["case"].map(self.is_qp_case)]
         if elu_df.empty:
             raise ValueError("Definir pelo menos uma combinação ELU além da QP")
-        initial = [self.design_one(r) for _, r in elu_df.iterrows()]
+        initial = []
+        for count, (_, row) in enumerate(elu_df.iterrows(), 1):
+            initial.append(self.design_one(row))
+            if progress:
+                progress(count, len(elu_df)+len(df))
         provisional = pd.DataFrame(initial)
         adopted_by_panel = {}
         for panel, group in provisional.groupby("Panel", dropna=False):
@@ -1720,11 +1803,10 @@ class WallDesigner:
                         mesh[j] = self.optimize_solution_for_cracking(check[key], mesh[j], mesh[j].as_prov,
                             self.max_spacing_for_direction(vertical), vertical, label)
         results = []
-        results = []
         for i, (_, row) in enumerate(df.iterrows(), 1):
             results.append(self.design_one(row, adopted_by_panel[str(row.get("panel", ""))]))
             if progress:
-                progress(i, len(df))
+                progress(len(elu_df)+i, len(elu_df)+len(df))
         output = pd.DataFrame(results)
         if self.wk_check_enabled:
             qp_panels = set(df.loc[df["case"].map(self.is_qp_case), "panel"].astype(str))
@@ -1764,7 +1846,7 @@ class WallsEC2App(tk.Tk):
         self.var_l0 = tk.StringVar(value="0")
         self.var_phi_eff = tk.StringVar(value="0")
         self.var_eps_ud = tk.StringVar(value="0.01")
-        self.var_thickness = tk.StringVar(value="200")
+        self.var_thickness = tk.StringVar(value="250")
         self.var_cover = tk.StringVar(value="35")
         self.var_concrete = tk.StringVar(value="C30/37")
         self.var_steel = tk.StringVar(value="500")
@@ -1995,7 +2077,7 @@ class WallsEC2App(tk.Tk):
         actions.pack(fill="x", pady=(0, 8))
         btns = [
             ("Colar área de transferência", self.paste_clipboard),
-            ("Importar .xlsx/.csv", self.import_file),
+            ("Importar tabela(s)", self.import_file),
             ("Calcular", self.run_design),
             ("Exportar .xlsx", self.export_excel),
             ("Relatório .pdf", self.export_pdf_report),
@@ -2421,20 +2503,24 @@ class WallsEC2App(tk.Tk):
         self.load_df(df)
 
     def import_file(self):
-        path = filedialog.askopenfilename(
-            title="Importar tabela",
+        paths = filedialog.askopenfilenames(
+            title="Importar tabela normal e/ou W&A (seleccionar em conjunto)",
             filetypes=[("Excel", "*.xlsx *.xls"), ("CSV", "*.csv"), ("Todos", "*.*")],
         )
-        if not path:
+        if not paths:
             return
         try:
-            if path.lower().endswith((".xlsx", ".xls")):
-                df = pd.read_excel(path, dtype=str)
-            else:
-                df = read_csv_robust(path)
+            tables = []
+            for path in paths:
+                if path.lower().endswith((".xlsx", ".xls")):
+                    tables.append(pd.read_excel(path, dtype=str))
+                else:
+                    tables.append(read_csv_robust(path))
+            df = combine_effort_tables(tables) if len(tables) > 1 else tables[0]
             self.load_df(df)
+            self.status_var.set(f"Importação concluída: {len(paths)} tabela(s), {len(self.df_clean)} linhas; pré-visualização até {MAX_PREVIEW_ROWS} linhas. Confirmar unidades e combinações.")
         except Exception as e:
-            messagebox.showerror("Erro", str(e))
+            messagebox.showerror("Erro de importação", str(e))
 
     def load_df(self, df: pd.DataFrame):
         self.df_raw = df.copy()
@@ -2463,7 +2549,10 @@ class WallsEC2App(tk.Tk):
         self.show_df(self.tree_detailed, self.df_detailed)
         self.show_df(self.tree_notes, self.df_notes)
         self.progress_var.set(0.0)
-        self.status_var.set(f"Tabela carregada: {len(self.df_clean)} linhas.")
+        format_note = ""
+        if not self.df_clean.empty and not self.df_clean["__missing_nmises"].iloc[0]:
+            format_note = " NMises informativo; esforços N assinados " + ("disponíveis." if not self.df_clean["__missing_nxx"].iloc[0] else "não fornecidos.")
+        self.status_var.set(f"Tabela carregada: {len(self.df_clean)} linhas." + format_note)
 
     def validate_inputs(self) -> Optional[str]:
         if self.df_clean is None or self.df_clean.empty:
@@ -3077,7 +3166,7 @@ class WallsEC2App(tk.Tk):
                 ("16_Raw_Table", self.df_clean),
                 ("17_EC2_Notes", self.df_notes),
                 ("18_NM_Stability", pick_cols(self.df_results, ["Panel", "Node", "Case", "Combo_type", "Axial_convention",
-                    "NXX_kN_m", "NYY_kN_m", "NXY_kN_m", "NM_X_util", "NM_Y_util", "NM_X_MRd", "NM_Y_MRd",
+                    "NXX_kN_m", "NYY_kN_m", "NXY_kN_m", "NMises_kN_m", "NMises_usage", "Source_tables_count", "NM_X_util", "NM_Y_util", "NM_X_MRd", "NM_Y_MRd",
                     "Stability_l0_mm", "Stability_phi_eff", "Stability_X_NB_kN_m", "Stability_Y_NB_kN_m",
                     "Stability_X_amplification", "Stability_Y_amplification", "ELS_X_sigma_plus_MPa", "ELS_X_sigma_minus_MPa",
                     "ELS_Y_sigma_plus_MPa", "ELS_Y_sigma_minus_MPa", "Status", "Verification_reason"])),
