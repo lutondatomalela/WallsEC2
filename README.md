@@ -4,14 +4,24 @@ Ferramenta de dimensionamento seccional de paredes de betão armado, segundo a N
 
 ## Windows x64 — release candidate
 
-A compilação nativa automatizada encontra-se em `.github/workflows/windows-release.yml`. Após aprovação dos testes, o fluxo gera o ZIP da pasta PyInstaller, valida o arranque e publica a pré-release na branch de lançamento.
+**[Descarregar WallsEC2 v2.0.0-rc1 para Windows x64 (.zip)](https://github.com/lutondatomalela/WallsEC2/releases/download/v2.0.0-rc1/WallsEC2-v2.0.0-rc1-Windows-x64.zip)**
+
+1. Extrair integralmente o ZIP.
+2. Abrir a pasta `WallsEC2` e executar `WallsEC2.exe`.
+3. Manter todos os ficheiros da pasta de distribuição juntos. Não é necessário instalar Python.
+
+- [Página da pré-release](https://github.com/lutondatomalela/WallsEC2/releases/tag/v2.0.0-rc1)
+- [SHA-256 da distribuição](https://github.com/lutondatomalela/WallsEC2/releases/download/v2.0.0-rc1/SHA256SUMS.txt)
+- [Compilação, regressão e teste de arranque em Windows](https://github.com/lutondatomalela/WallsEC2/actions/runs/45812348273) — concluídos com sucesso.
+
+A distribuição corresponde ao código da [branch de lançamento](https://github.com/lutondatomalela/WallsEC2/tree/release/v2.0.0-rc1). O workflow de compilação está em `.github/workflows/windows-release.yml`. O estatuto de pré-release é mantido: os testes de software não constituem validação estrutural integral.
 
 ## Instalação Windows a partir do código fonte
 
 1. Instalar Python 3.12 ou 3.13 de 64 bits.
 2. Executar `INSTALAR_Windows.bat`.
 3. Executar `INICIAR_WallsEC2.bat`.
-4. Opcional: `COMPILAR_Windows.bat` gera a distribuição PyInstaller. Manter a pasta `dist/WallsEC2` completa. A compilação e os testes nativos em Windows não foram realizados neste ambiente.
+4. Opcional: `COMPILAR_Windows.bat` gera a distribuição PyInstaller. Manter a pasta `dist/WallsEC2` completa. A distribuição publicada foi compilada e testada em Windows através do GitHub Actions.
 
 ## Utilização
 
