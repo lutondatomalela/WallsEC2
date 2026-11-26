@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+build/
+dist/
+*.log
+# Project data and private audit records are never public fixtures.
+dados_do_caso/
+perfis/
+referencia/
+validacao/
+resultados*/
+CHECKPOINT.md
+*.zip
+*.xlsx
+*.pdf
